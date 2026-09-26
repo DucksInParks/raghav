@@ -87,7 +87,6 @@ class RaghavAniNami : MainAPI() {
             return null
         }
 
-
         val subIdsByNumber = sortedMapOf<Int, MutableList<String>>()
         val dubIdsByNumber = sortedMapOf<Int, MutableList<String>>()
 
@@ -105,7 +104,6 @@ class RaghavAniNami : MainAPI() {
                 }
             } catch (e: Throwable) { if (e is CancellationException) throw e }
         }
-
 
         val subEpisodes = subIdsByNumber.map { (num, ids) ->
             newEpisode("sub|${ids.joinToString(";;")}") {
@@ -142,7 +140,6 @@ class RaghavAniNami : MainAPI() {
             return false
         }
 
-
         var found = false
         val seenUrls = mutableSetOf<String>()
 
@@ -169,7 +166,6 @@ class RaghavAniNami : MainAPI() {
                 continue
             } ?: continue
 
-
             for (stream in streams) {
                 val streamUrl = stream.url ?: continue
                 if (streamUrl.isBlank() || !seenUrls.add(streamUrl)) continue
@@ -180,8 +176,6 @@ class RaghavAniNami : MainAPI() {
                 when (stream.type?.lowercase()) {
                     "hls" -> {
                         val label = listOfNotNull("AniNami", serverTag, qualityLabel).joinToString(" ")
-                        // vivibebe/bibiemb storage 403s segments when it dies,
-                        // probe those before offering them
                         val host = try {
                             java.net.URL(streamUrl).host
                         } catch (e: Exception) {

@@ -486,7 +486,6 @@ class RaghavAnime : MainAPI() {
             },
         )
 
-        // known fast sources first so links show up early, nothing gets skipped
         val ordered = sources
             .mapIndexed { idx, src -> Triple(RaghavSourceStats.priority(src.first), idx, src) }
             .sortedByDescending { it.first }
@@ -494,7 +493,6 @@ class RaghavAnime : MainAPI() {
 
         val concurrency = RaghavPerf.sourceConcurrency()
 
-        // slow sources keep resolving past the wait cap instead of being cut off
         linksJob?.cancel()
         linksJob = loadScope.launch {
             RaghavPerf.runLimitedAsync(concurrency, ordered.map { (name, task) ->
@@ -582,7 +580,6 @@ class RaghavAnime : MainAPI() {
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            // a failed warm only means that show resolves on click
         }
     }
 
@@ -594,7 +591,6 @@ class RaghavAnime : MainAPI() {
 
         prefetchJob?.cancel()
         prefetchJob = prefetchScope.launch {
-            // let the show page render before any background work starts
             delay(750)
             for (isDub in listOf(false, true)) {
                 if (!isActive) return@launch

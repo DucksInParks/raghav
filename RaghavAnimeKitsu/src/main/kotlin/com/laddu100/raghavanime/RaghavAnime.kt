@@ -71,7 +71,7 @@ class RaghavAnime : MainAPI() {
         try {
             lastDownCheckTime = now
             val response = try {
-                app.get("$KITSU_API/anime?page[limit]=1", headers = KITSU_HEADERS, timeout = 10_000L).text
+                app.get("$KITSU_API/anime?page[limit]=1", headers = KITSU_HEADERS, timeout = 10L).text
             } catch (e: Exception) {
                 return false
             }
@@ -187,7 +187,7 @@ class RaghavAnime : MainAPI() {
         }
 
         val home = try {
-            val responseText = app.get(url, headers = KITSU_HEADERS, timeout = 15_000L).text
+            val responseText = app.get(url, headers = KITSU_HEADERS, timeout = 15L).text
             val response = parseJson<KitsuResponse>(responseText)
             val mediaList = response.data ?: emptyList()
 
@@ -233,7 +233,7 @@ class RaghavAnime : MainAPI() {
         val encoded = URLEncoder.encode(query, "UTF-8")
         val results = try {
             val url = "$KITSU_API/anime?filter[text]=$encoded&page[limit]=20"
-            val responseText = app.get(url, headers = KITSU_HEADERS, timeout = 15_000L).text
+            val responseText = app.get(url, headers = KITSU_HEADERS, timeout = 15L).text
             val response = parseJson<KitsuResponse>(responseText)
             val mediaList = response.data ?: emptyList()
 
@@ -261,7 +261,7 @@ class RaghavAnime : MainAPI() {
 
         val media = try {
             val infoUrl = "$KITSU_API/anime/$kitsuId?include=mappings"
-            val infoText = app.get(infoUrl, headers = KITSU_HEADERS, timeout = 15_000L).text
+            val infoText = app.get(infoUrl, headers = KITSU_HEADERS, timeout = 15L).text
             parseJson<KitsuSingleResponse>(infoText)
         } catch (e: Exception) {
             return null
@@ -365,7 +365,7 @@ class RaghavAnime : MainAPI() {
     private suspend fun fetchCategories(kitsuId: Int): List<String> {
         return try {
             val url = "$KITSU_API/anime/$kitsuId/categories"
-            val responseText = app.get(url, headers = KITSU_HEADERS, timeout = 10_000L).text
+            val responseText = app.get(url, headers = KITSU_HEADERS, timeout = 10L).text
             val response = parseJson<KitsuResponse>(responseText)
             response.data?.mapNotNull { it.attributes?.title }.orEmpty()
         } catch (_: Exception) {
@@ -505,7 +505,6 @@ class RaghavAnime : MainAPI() {
             },
         )
 
-        // known fast sources first so links show up early, nothing gets skipped
         val ordered = sources
             .mapIndexed { idx, src -> Triple(RaghavSourceStats.priority(src.first), idx, src) }
             .sortedByDescending { it.first }
@@ -513,7 +512,6 @@ class RaghavAnime : MainAPI() {
 
         val concurrency = RaghavPerf.sourceConcurrency()
 
-        // slow sources keep resolving past the wait cap instead of being cut off
         linksJob?.cancel()
         linksJob = loadScope.launch {
             RaghavPerf.runLimitedAsync(concurrency, ordered.map { (name, task) ->
@@ -601,7 +599,6 @@ class RaghavAnime : MainAPI() {
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            // a failed warm only means that show resolves on click
         }
     }
 
@@ -614,7 +611,6 @@ class RaghavAnime : MainAPI() {
 
         prefetchJob?.cancel()
         prefetchJob = prefetchScope.launch {
-            // let the show page render before any background work starts
             delay(750)
             for (isDub in listOf(false, true)) {
                 if (!isActive) return@launch

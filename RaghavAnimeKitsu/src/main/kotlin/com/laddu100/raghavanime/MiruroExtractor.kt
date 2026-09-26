@@ -34,8 +34,6 @@ open class MiruroMegaPlay(private val sourceName: String = "MegaPlay") : Extract
             return
         }
 
-        // the megaplay family occasionally hides the playlist behind a player
-        // only a real browser can drive, so fall back to interception
         runCatching {
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""\.m3u8"""),

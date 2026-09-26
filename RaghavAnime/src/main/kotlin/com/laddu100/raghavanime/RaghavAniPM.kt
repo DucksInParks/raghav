@@ -39,7 +39,7 @@ class RaghavAniPM : MainAPI() {
 
     private suspend fun getJson(url: String, referer: String = "$mainUrl/"): String? {
         return try {
-            val res = app.get(url, headers = headers(referer), timeout = 30_000L)
+            val res = app.get(url, headers = headers(referer), timeout = 30L)
             if (res.code == 200) res.text else {
                 null
             }
@@ -266,7 +266,6 @@ class RaghavAniPM : MainAPI() {
         val stream = MegaPlayHelper.resolveStream(embedUrl, "$mainUrl/", "AniPM") ?: return false
         if (!seenLinks.add(stream.m3u8)) return true
 
-        // codec-less master variants crash the ffmpeg renderer, emitLinks sidesteps the master entirely
         return MegaPlayHelper.emitLinks(
             name, "MegaPlay", stream.m3u8, MEGAPLAY_REFERER,
             stream.subtitles, subtitleCallback, callback

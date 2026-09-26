@@ -12,8 +12,6 @@ import java.net.URL
 import java.net.URLDecoder
 import kotlinx.coroutines.CancellationException
 
-// embed hosts shared across the aggregated sources: vivibebe/bibiemb inline the
-// playlist, the otaku clones pack it with jsunpacker, megaplay needs its ajax flow
 object RaghavEmbeds {
 
     private const val USER_AGENT =
@@ -98,8 +96,6 @@ object RaghavEmbeds {
         return emitM3u8(label, m3u8, "https://${hostOf(embedUrl)}/", subtitleCallback, callback)
     }
 
-    // flixcloud embeds wrap the playlist in a wasm derived cipher; the local
-    // proxy relays the decrypted segments so the player sees a normal stream
     private suspend fun resolveFlix(
         embedUrl: String,
         referer: String,
@@ -169,8 +165,6 @@ object RaghavEmbeds {
         }
         if (loaded) return true
 
-        // hosts without a registered extractor still expose the playlist in
-        // their page most of the time, sometimes packed
         val html = fetchEmbedHtml(embedUrl, referer) ?: return false
         var m3u8 = m3u8Regex.find(html)?.value
         if (m3u8 == null) {
@@ -188,26 +182,24 @@ object RaghavEmbeds {
                     "User-Agent" to USER_AGENT,
                     "Referer" to referer
                 ),
-                timeout = 15_000L
+                timeout = 15L
             ).text
         } catch (e: Exception) {
             null
         }
     }
 
-    // vivibebe/bibiemb relay through third-party storage that dies quietly and
-    // 403s every segment, so probe once before offering the stream
     suspend fun streamPlayable(m3u8Url: String, referer: String): Boolean {
         return try {
             val headers = mapOf("User-Agent" to USER_AGENT, "Referer" to referer)
-            val master = app.get(m3u8Url, headers = headers, timeout = 15_000L).text
+            val master = app.get(m3u8Url, headers = headers, timeout = 15L).text
             if (!master.contains("#EXTM3U")) return false
             val playlistUrl: String
             val playlist: String
             if (master.contains("#EXT-X-STREAM-INF")) {
                 val variant = firstEntry(master) ?: return false
                 playlistUrl = relativeTo(m3u8Url, variant)
-                playlist = app.get(playlistUrl, headers = headers, timeout = 15_000L).text
+                playlist = app.get(playlistUrl, headers = headers, timeout = 15L).text
                 if (!playlist.contains("#EXTM3U")) return false
             } else {
                 playlistUrl = m3u8Url
@@ -217,7 +209,7 @@ object RaghavEmbeds {
             val probe = app.get(
                 relativeTo(playlistUrl, seg),
                 headers = headers + mapOf("Range" to "bytes=0-0"),
-                timeout = 15_000L
+                timeout = 15L
             )
             probe.code == 200 || probe.code == 206
         } catch (e: Exception) {
@@ -259,8 +251,6 @@ object RaghavEmbeds {
         return true
     }
 
-    // embed urls from these providers carry the subtitle file as a query param
-    // (sub=, caption_1=, c1_file=) which the player injects into the iframe
     private fun passSubtitle(embedUrl: String, subtitleCallback: (SubtitleFile) -> Unit) {
         try {
             val query = URL(embedUrl).query ?: return

@@ -47,8 +47,6 @@ private val cfBlockerPhrases = listOf(
 
 private const val COOKIE_TTL_MS = 45 * 60 * 1000L
 
-// cookies are stored per host, senshi.to, the vidcloud api and the stream cdn
-// each run their own challenge
 private object SenshiCookieStore {
     private const val PREFS_NAME = "SenshiCFBypass"
 
@@ -372,7 +370,7 @@ internal fun initSenshiCFBypass(context: Context) {
 internal suspend fun cfGet(
     url: String,
     headers: Map<String, String> = emptyMap(),
-    timeout: Long = 20_000L
+    timeout: Long = 20L
 ): NiceResponse {
     val host = hostOf(url)
 
@@ -404,7 +402,7 @@ internal suspend fun cfPost(
     url: String,
     body: String,
     headers: Map<String, String> = emptyMap(),
-    timeout: Long = 20_000L
+    timeout: Long = 20L
 ): NiceResponse {
     val host = hostOf(url)
 

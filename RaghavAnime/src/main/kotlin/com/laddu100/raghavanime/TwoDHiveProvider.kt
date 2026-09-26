@@ -234,7 +234,6 @@ class RaghavTwoDHive : MainAPI() {
                 this.posterUrl = ep.posterUrl
             }
         }
-        // the dub tab just ends in "no links" when megaplay has no dub track
         val hasDub = malId != null && probeDub(malId)
         val dubEpisodes = if (hasDub) {
             episodes.map { ep ->
@@ -261,7 +260,7 @@ class RaghavTwoDHive : MainAPI() {
             val html = app.get(
                 "https://megaplay.buzz/stream/mal/$malId/1/dub",
                 headers = mapOf("User-Agent" to userAgent, "Referer" to "$mainUrl/"),
-                timeout = 15_000L
+                timeout = 15L
             ).text
             val hasDub = html.contains("data-id=") || html.contains("data-realid=")
             hasDub
@@ -284,7 +283,6 @@ class RaghavTwoDHive : MainAPI() {
         val html = quickGet(epUrl)
         val soup = Jsoup.parse(html)
 
-        // the island was renamed from MultiServerPlayer to EpisodePlayer, match both
         val island = soup.select("astro-island").firstOrNull {
             val cu = it.attr("component-url")
             cu.contains("EpisodePlayer", ignoreCase = true) || cu.contains("MultiServerPlayer", ignoreCase = true)
@@ -335,7 +333,6 @@ class RaghavTwoDHive : MainAPI() {
         }
 
         val label = if (type == "dub") "MegaPlay Dub" else "MegaPlay Sub"
-        // the megap cdn rejects requests without a megaplay referer
         return MegaPlayHelper.emitLinks(
             "2DHive", label, stream.m3u8, "https://megaplay.buzz/",
             stream.subtitles, subtitleCallback, callback
@@ -434,11 +431,8 @@ class RaghavTwoDHive : MainAPI() {
             if (!r.u) throw new Error(r.m || "no stream url");
             var url = new URL(r.u, location.origin).href;
             if (/\.(m3u8|mp4)([?#]|$)/i.test(url)) {
-                // the host app watches for media requests leaving the webview
                 fetch(url, { mode: "no-cors" }).catch(function () {});
             } else {
-                // some titles hand back a third-party embed page instead, let
-                // that player load and ask for its own media
                 location.href = url;
             }
         }
@@ -465,7 +459,6 @@ class RaghavTwoDHive : MainAPI() {
             val resolver = WebViewResolver(
                 interceptUrl = Regex("""(?i)\.(m3u8|mp4)(?:[?#]|$)"""),
                 script = babaSolverScript,
-                // the cap pow solve alone can take half a minute on slow hardware
                 useOkhttp = false, timeout = 120_000L
             )
             val resolved = RaghavPerf.withWebView { app.get(embedUrl, referer = epUrl, interceptor = resolver).url }

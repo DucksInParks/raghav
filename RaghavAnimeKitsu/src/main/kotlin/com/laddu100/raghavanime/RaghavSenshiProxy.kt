@@ -161,7 +161,6 @@ object RaghavSenshiProxy {
                 else -> send404(conn)
             }
         } catch (e: Exception) {
-            // one bad request must not kill the proxy thread; finally closes the socket
         } finally {
             try { conn.close() } catch (_: Exception) {}
         }

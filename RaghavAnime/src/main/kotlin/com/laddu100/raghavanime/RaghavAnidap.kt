@@ -81,7 +81,7 @@ class RaghavAnidap : MainAPI() {
         if (query.length < 2) return emptyList()
         return try {
             val encoded = java.net.URLEncoder.encode(query, "UTF-8")
-            val res = app.get("$mainUrl/api/anime/search?q=$encoded", headers = baseHeaders, timeout = 30_000L)
+            val res = app.get("$mainUrl/api/anime/search?q=$encoded", headers = baseHeaders, timeout = 30L)
             val root = parseJson<com.fasterxml.jackson.databind.JsonNode>(res.text)
             val results = root.path("results")
             if (!results.isArray) emptyList()
@@ -109,11 +109,10 @@ class RaghavAnidap : MainAPI() {
         if (animeId.isBlank()) return null
 
         return try {
-            val detailRes = app.get("$mainUrl/api/anime/$animeId", headers = baseHeaders, timeout = 30_000L)
+            val detailRes = app.get("$mainUrl/api/anime/$animeId", headers = baseHeaders, timeout = 30L)
             val root = parseJson<com.fasterxml.jackson.databind.JsonNode>(detailRes.text)
             val data = root.path("data").let { if (it.isObject && it.size() > 0) it else root }
 
-            // the detail id is the slug chad expects (e.g. one-piece-p8k27)
             val slug = data.path("id").asText("").ifBlank { animeId }
             val titles = data.path("titles")
             val title = titles.path("en").asText("").ifBlank { null }
@@ -168,7 +167,6 @@ class RaghavAnidap : MainAPI() {
                 null
             }
 
-            // sub/dub flags can be missing per episode, ep1 servers covers those
             var ep1HasSub: Boolean? = null
             var ep1HasDub: Boolean? = null
             if (episodes == null || episodes.any { it.hasSub == null || it.hasDub == null }) {
@@ -230,8 +228,6 @@ class RaghavAnidap : MainAPI() {
                 }
             }
 
-            // the app hides the sub/dub switcher on movie types, so dual audio
-            // movies are typed as regular anime to keep both reachable
             val tvType = when {
                 format == "MOVIE" && dubEpisodes.isNotEmpty() -> TvType.Anime
                 format == "MOVIE" -> TvType.AnimeMovie
@@ -263,7 +259,7 @@ class RaghavAnidap : MainAPI() {
     ): Boolean {
         mainUrl = FirebaseDomainHelper.getDomain("anidap") ?: mainUrl
         return try {
-            val detailRes = app.get("$mainUrl/api/anime/$anilistId", headers = baseHeaders, timeout = 15_000L)
+            val detailRes = app.get("$mainUrl/api/anime/$anilistId", headers = baseHeaders, timeout = 15L)
             val root = parseJson<com.fasterxml.jackson.databind.JsonNode>(detailRes.text)
             val data = root.path("data").let { if (it.isObject && it.size() > 0) it else root }
             val slug = data.path("id").asText("").ifBlank {
@@ -282,7 +278,6 @@ class RaghavAnidap : MainAPI() {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         mainUrl = FirebaseDomainHelper.getDomain("anidap") ?: mainUrl
-        // data: "<mainUrl>|<slug>|<epNum>|<type>"
         val rawParts = data.trim().split("|")
         val parts = if (rawParts.firstOrNull()?.startsWith("http") == true) rawParts.drop(1) else rawParts
         if (parts.size < 3) {
@@ -296,7 +291,6 @@ class RaghavAnidap : MainAPI() {
 
     private data class ServerProvider(val id: String, val tip: String?)
 
-    // providers differ per episode, cache per slug|ep
     private val serversCache = ConcurrentHashMap<String, Pair<Long, Map<String, List<ServerProvider>>>>()
 
     private suspend fun serversForEpisode(slug: String, epNum: String): Map<String, List<ServerProvider>> {
@@ -323,9 +317,6 @@ class RaghavAnidap : MainAPI() {
                         }
                     }
                 }
-                // chad never lists the site's own adp server, the web client
-                // puts it first in every list - do the same or those streams
-                // never get requested
                 fun withAdp(list: List<ServerProvider>): List<ServerProvider> =
                     if (list.any { it.id == "adp" }) list
                     else listOf(ServerProvider("adp", null)) + list
@@ -401,8 +392,6 @@ class RaghavAnidap : MainAPI() {
         }
     }
 
-    // walks master -> best variant -> first segment so dead hosts drop out
-    // before the player ever sees them
     private fun validateHls(
         masterUrl: String,
         headers: Map<String, String>,
@@ -501,8 +490,6 @@ class RaghavAnidap : MainAPI() {
                                 }
 
                                 AnidapUrl.looksLikeHls(srcUrl, srcType) -> {
-                                    // native apps can send the provider headers a browser cannot,
-                                    // so try the raw url first and only then the site proxy
                                     var variants = validateHls(srcUrl, payload.headers)
                                     var headers = payload.headers
                                     if (variants == null && proxyUrl != srcUrl) {
@@ -554,8 +541,6 @@ class RaghavAnidap : MainAPI() {
                                 }
 
                                 else -> {
-                                    // embed page or something unknown - let the built-in
-                                    // extractors try, fall back to a direct probe
                                     val refererForExtractor = payload.headers["Referer"]
                                         ?: payload.headers["referer"] ?: "$mainUrl/"
                                     val loaded = try {

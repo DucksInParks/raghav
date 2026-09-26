@@ -194,7 +194,7 @@ class RaghavAnimo : MainAPI() {
             "User-Agent" to ua,
             "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language" to "en-US,en;q=0.7"
-        ), timeout = 15_000L)
+        ), timeout = 15L)
         if (embedResp.code != 200) return false
 
         val token = Regex("getSources\\?t=([A-Za-z0-9_.-]+)")
@@ -209,7 +209,7 @@ class RaghavAnimo : MainAPI() {
             "Sec-Fetch-Dest" to "empty"
         )
 
-        val sourcesResp = app.get("$cdnUrl/stream/getSources?t=$token", headers = reqHeaders, timeout = 15_000L)
+        val sourcesResp = app.get("$cdnUrl/stream/getSources?t=$token", headers = reqHeaders, timeout = 15L)
         if (sourcesResp.code != 200) return false
 
         val sourcesText = sourcesResp.text
@@ -219,7 +219,7 @@ class RaghavAnimo : MainAPI() {
         val masterFile = sources.sources?.firstOrNull()?.file ?: return false
         val masterUrl = if (masterFile.startsWith("http")) masterFile else "$cdnUrl/${masterFile.removePrefix("/")}"
 
-        val masterResp = app.get(masterUrl, headers = reqHeaders, timeout = 15_000L)
+        val masterResp = app.get(masterUrl, headers = reqHeaders, timeout = 15L)
         if (masterResp.code != 200 || !masterResp.text.trim().startsWith("#EXTM3U")) return false
 
         val playHeaders = mapOf(

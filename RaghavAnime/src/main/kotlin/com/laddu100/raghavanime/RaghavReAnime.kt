@@ -73,8 +73,6 @@ class RaghavReAnime : MainAPI() {
                         .containsMatchIn(res.masterContent) ||
                         (res.masterContent.contains("TYPE=AUDIO") && !hasEnglishAudio)
 
-                    // the flix master carries every audio track, pick the one
-                    // matching the requested language
                     val lang = when {
                         isDub && hasEnglishAudio -> "dub"
                         !isDub && (hasOtherAudio || !hasEnglishAudio) -> "sub"

@@ -13,10 +13,6 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import org.jsoup.Jsoup
 import kotlinx.coroutines.CancellationException
 
-// AniSuge serves per-episode sources through the mapper api its watch page
-// loads via assets/js/mapper.js:
-//   https://mapper.nekostream.site/api/mal/{data-mal}/{data-slug}/{data-timestamp}
-// each provider node holds sub/dub entries with a stream url and a download map
 object AniSugeMapper {
     private val json = ObjectMapper()
     private const val MAPPER_API = "https://mapper.nekostream.site/api/mal/"
@@ -31,7 +27,7 @@ object AniSugeMapper {
                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                     "Accept" to "application/json"
                 ),
-                timeout = 15_000L
+                timeout = 15L
             ).text
         } catch (e: Exception) {
             return null
@@ -69,7 +65,6 @@ object AniSugeMapper {
         return MapperEntry(url, downloads)
     }
 
-    // display names match the site's mapper.js
     fun displayProviderName(key: String): String = when (key.lowercase()) {
         "gogoanime" -> "Vidstream"
         "anivibe" -> "vibe-Stream"
@@ -78,8 +73,6 @@ object AniSugeMapper {
     }
 }
 
-// pahe download pages build a workers.dev url client-side; requesting it
-// redirects to the kwik.cx file page
 object PaheDownloadResolver {
     private val workersUrlRegex = Regex("""const\s+url\s*=\s*"(https?://[^"]+)"""")
     private val anyHttpsRegex = Regex(""""(https?://[^"]*workers\.dev[^"]*)"""")
@@ -91,7 +84,7 @@ object PaheDownloadResolver {
                 headers = mapOf(
                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
                 ),
-                timeout = 15_000L
+                timeout = 15L
             ).text
         } catch (e: Exception) {
             return null
@@ -112,8 +105,6 @@ object PaheDownloadResolver {
     }
 }
 
-// kwik.cx file pages pack their player script; the unpacked script either
-// holds the source directly or a form whose action 302s to it
 class KwikExtractor : ExtractorApi() {
     override val name = "Kwik"
     override val mainUrl = "https://kwik.cx"
@@ -151,7 +142,7 @@ class KwikExtractor : ExtractorApi() {
                     "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
                     "Referer" to (referer ?: mainUrl)
                 ),
-                timeout = 20_000L
+                timeout = 20L
             )
         } catch (e: Exception) {
             return null
@@ -177,7 +168,6 @@ class KwikExtractor : ExtractorApi() {
             }
         }
 
-        // some mirrors inline the source without a packer
         sourceRegex.find(html)?.groupValues?.get(1)?.let { src ->
             if (src.startsWith("http") && (src.contains(".m3u8") || src.contains(".mp4"))) {
                 return src to page.url

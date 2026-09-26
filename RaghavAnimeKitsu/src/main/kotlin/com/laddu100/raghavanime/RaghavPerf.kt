@@ -69,7 +69,6 @@ object RaghavPerf {
                         } catch (c: CancellationException) {
                             throw c
                         } catch (_: Throwable) {
-                            // a dead source must not cancel the rest of the wave
                         }
                     }
                 }
@@ -77,8 +76,6 @@ object RaghavPerf {
         }
     }
 
-    // every WebView costs a renderer process, so at most two run at once no
-    // matter how many sources are resolving in parallel
     private val webViewGate = Semaphore(2)
 
     suspend fun <T> withWebView(block: suspend () -> T): T {
@@ -148,15 +145,11 @@ object RaghavSourceStats {
         synchronized(lock) {
             val s = stats.getOrPut(source) { Stat() }
             if (success) {
-                // one success clears the failure history so a recovered source
-                // climbs back to the front of the queue right away
                 s.success++
                 s.fail = 0
                 s.totalMs += durationMs
                 s.consecutiveFails = 0
             } else {
-                // one failure wipes the timing history so a freshly dead source
-                // stops holding an early slot
                 s.fail++
                 s.success = 0
                 s.totalMs = 0L
@@ -169,7 +162,6 @@ object RaghavSourceStats {
     fun priority(source: String): Double {
         ensureLoaded()
         val s = stats[source] ?: return 0.0
-        // still queued, only pushed to the back
         if (s.consecutiveFails >= BROKEN_AFTER_FAILS) return -1000.0
         val runs = s.success + s.fail
         if (runs <= 0) return 0.0

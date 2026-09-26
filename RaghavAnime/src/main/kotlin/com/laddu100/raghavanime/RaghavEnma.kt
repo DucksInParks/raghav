@@ -585,7 +585,6 @@ class RaghavEnma : MainAPI() {
         try {
             val host = Regex("""(https?://[^/]+)""").find(iframeUrl)?.groupValues?.get(1) ?: return false
 
-            // the sources token expires within seconds, so each retry reloads the page
             for (attempt in 0 until 3) {
                 val html = try {
                     app.get(iframeUrl, headers = pageHeaders("$mainUrl/")).text

@@ -129,7 +129,6 @@ class RaghavAniChan : MainAPI() {
         return found
     }
 
-    // the session cookie is single use, every servers call needs a fresh one
     private suspend fun newWatchSession(): String? {
         return try {
             val resp = app.post(

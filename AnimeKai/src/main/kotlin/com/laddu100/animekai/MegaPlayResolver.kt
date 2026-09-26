@@ -1,4 +1,4 @@
-package com.laddu100
+package com.laddu100.animekai
 
 import android.util.Base64
 import com.fasterxml.jackson.databind.JsonNode
@@ -6,14 +6,15 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
 import com.lagradost.cloudstream3.newSubtitleFile
-import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
+import com.lagradost.cloudstream3.utils.newExtractorLink
 import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
 
-object MegaPlayCipher {
+private object MegaPlayCipher {
     private const val FALLBACK_KEY_SEED = "i?LMTAx0Q6,:}50U"
     private const val FALLBACK_IV_SEED = "W0;27ToaUpl_P%'c"
 
@@ -28,11 +29,11 @@ object MegaPlayCipher {
     private suspend fun keySeedCandidates(baseUrl: String): List<Pair<String, String>> {
         cachedSeeds?.let { return listOf(it, fallback()) }
         val dynamic = try {
-            val js = app.get("$baseUrl/lib/newclient.min.js", timeout = 10_000L).text
+            val js = app.get("$baseUrl/lib/newclient.min.js", timeout = 10L).text
             keyPairRegex.find(js)?.groupValues?.let { g ->
                 Pair(g[1], g[2]).also { cachedSeeds = it }
             }
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
         return listOfNotNull(dynamic, fallback())
@@ -44,8 +45,8 @@ object MegaPlayCipher {
             while (b64.length % 4 != 0) b64 += "="
             val cipherBytes = Base64.decode(b64, Base64.DEFAULT)
 
-            val seedBytes = keySeed.toByteArray(Charsets.UTF_8)
             val keyBytes = ByteArray(32)
+            val seedBytes = keySeed.toByteArray(Charsets.UTF_8)
             System.arraycopy(seedBytes, 0, keyBytes, 0, minOf(32, seedBytes.size))
 
             val ivBytes = ByteArray(16)
@@ -55,7 +56,7 @@ object MegaPlayCipher {
             val cipher = Cipher.getInstance("AES/CBC/PKCS5Padding")
             cipher.init(Cipher.DECRYPT_MODE, SecretKeySpec(keyBytes, "AES"), IvParameterSpec(ivBytes))
             String(cipher.doFinal(cipherBytes), Charsets.UTF_8)
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             null
         }
     }
@@ -69,22 +70,18 @@ object MegaPlayCipher {
     }
 }
 
-object MegaPlayHelper {
+class MegaPlayStream(val m3u8: String, val subtitles: List<Pair<String, String>>)
+
+object MegaPlayResolver {
     private val mapper = ObjectMapper()
 
     private const val USER_AGENT =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-    class MegaPlayStream(val m3u8: String, val subtitles: List<Pair<String, String>>)
+    private fun audioTypeFromUrl(url: String): String? =
+        Regex("""/(dub|sub|hsub)(?:[/?#]|$)""").find(url)?.groupValues?.get(1)
 
-    fun audioTypeFromUrl(url: String): String? =
-        Regex("""/(dub|sub)(?:[/?#]|$)""").find(url)?.groupValues?.get(1)
-
-    suspend fun resolveStream(
-        embedUrl: String,
-        referer: String?,
-        sourceTag: String
-    ): MegaPlayStream? {
+    suspend fun resolveStream(embedUrl: String, referer: String?): MegaPlayStream? {
         val host = Regex("""https?://([^/]+)""").find(embedUrl)?.groupValues?.get(1) ?: return null
         val pageHeaders = mapOf(
             "User-Agent" to USER_AGENT,
@@ -93,18 +90,16 @@ object MegaPlayHelper {
 
         val pageHtml = try {
             app.get(embedUrl, headers = pageHeaders).text
-        } catch (e: Exception) {
+        } catch (_: Exception) {
             return null
         }
 
-        val streamId = Regex("""data-id=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
-            ?: Regex("""data-realid=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
-            ?: Regex("""/stream/s-\d+/(\d+)/""").find(embedUrl)?.groupValues?.get(1)
+        val streamId = Regex("""data-realid=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
+            ?: Regex("""data-id=["'](\d+)""").find(pageHtml)?.groupValues?.get(1)
+            ?: Regex("""/stream/(?:videojs/)?s-\d+/(\d+)/""").find(embedUrl)?.groupValues?.get(1)
             ?: return null
 
-        val audioType = audioTypeFromUrl(embedUrl)
-            ?: Regex("""type\s*:\s*['"](dub|sub)['"]""").find(pageHtml)?.groupValues?.get(1)
-            ?: "sub"
+        val audioType = audioTypeFromUrl(embedUrl) ?: "sub"
 
         val altHost = Regex("""data-domain=["']([^"']+)["']""").find(pageHtml)?.groupValues?.get(1)
         val hosts = listOfNotNull(host, altHost?.takeIf { it != host }).distinct()
@@ -121,11 +116,8 @@ object MegaPlayHelper {
             for (endpoint in listOf("getSourcesNew", "getSources")) {
                 val root = fetchJson("$base/stream/$endpoint?id=$streamId&type=$audioType", ajaxHeaders)
                     ?: continue
-                val streamUrl = extractStream(root, base)
-                if (streamUrl != null) {
-                    val subs = parseSubtitleTracks(root, streamUrl)
-                    return MegaPlayStream(streamUrl, subs)
-                }
+                val streamUrl = extractStream(root, base) ?: continue
+                return MegaPlayStream(streamUrl, parseSubtitleTracks(root))
             }
         }
         return null
@@ -139,21 +131,14 @@ object MegaPlayHelper {
             sources.isArray && sources.size() > 0 -> sources.get(0)?.get("file")?.asText()
             else -> null
         }
-        if (!plain.isNullOrBlank()) return migrateLegacyUrl(plain)
+        if (!plain.isNullOrBlank()) return plain
 
         val enc = root.get("enc")?.takeIf { !it.isNull }?.asText() ?: return null
-        val resolved = MegaPlayCipher.resolveEncStreamUrl(enc, base) ?: return null
-        return migrateLegacyUrl(resolved)
+        return MegaPlayCipher.resolveEncStreamUrl(enc, base)
     }
 
-    private fun migrateLegacyUrl(url: String): String {
-        if (!url.contains("https://cdn.imgnex.top/anime")) return url
-        return url.replace("https://cdn.imgnex.top/anime", "https://megap.norami.top")
-    }
-
-    private fun parseSubtitleTracks(root: JsonNode, m3u8: String): List<Pair<String, String>> {
+    private fun parseSubtitleTracks(root: JsonNode): List<Pair<String, String>> {
         val subs = mutableListOf<Pair<String, String>>()
-        val origin = Regex("""https?://[^/]+""").find(m3u8)?.value ?: "https://megap.norami.top"
         val tracks = root.get("tracks") ?: return subs
         if (!tracks.isArray) return subs
         for (element in tracks) {
@@ -161,18 +146,15 @@ object MegaPlayHelper {
             if (kind != "captions" && kind != "subtitles") continue
             val file = element.get("file")?.asText() ?: continue
             if (file.isBlank()) continue
-            val migrated = if (file.contains("https://cdn.imgnex.top/anime")) {
-                file.replace("https://cdn.imgnex.top/anime", origin)
-            } else file
-            subs.add((element.get("label")?.asText() ?: "English") to migrated)
+            subs.add((element.get("label")?.asText() ?: "English") to file)
         }
         return subs
     }
 
     private suspend fun fetchJson(url: String, headers: Map<String, String>): JsonNode? {
         return try {
-            mapper.readTree(app.get(url, headers = headers, timeout = 15_000L).text)
-        } catch (e: Exception) {
+            mapper.readTree(app.get(url, headers = headers, timeout = 15L).text)
+        } catch (_: Exception) {
             null
         }
     }
@@ -231,8 +213,7 @@ object MegaPlayHelper {
         referer: String,
         subtitles: List<Pair<String, String>>,
         subtitleCallback: (SubtitleFile) -> Unit,
-        callback: (com.lagradost.cloudstream3.utils.ExtractorLink) -> Unit,
-        withQualitySuffix: Boolean = true
+        callback: (ExtractorLink) -> Unit
     ): Boolean {
         val playHeaders = mapOf(
             "User-Agent" to USER_AGENT,
@@ -241,8 +222,8 @@ object MegaPlayHelper {
 
         val signedMaster = signUrl(m3u8)
         val masterText = try {
-            app.get(signedMaster, headers = playHeaders, timeout = 15_000L).text
-        } catch (e: Exception) {
+            app.get(signedMaster, headers = playHeaders, timeout = 15L).text
+        } catch (_: Exception) {
             null
         }
 
@@ -250,7 +231,7 @@ object MegaPlayHelper {
         val variants = masterText?.let { parseVariants(m3u8, it) } ?: emptyList()
         if (variants.isNotEmpty()) {
             for (v in variants) {
-                val suffix = if (withQualitySuffix) v.quality?.let { "${it}p" } ?: "" else ""
+                val suffix = v.quality?.let { "${it}p" } ?: ""
                 callback.invoke(
                     newExtractorLink(
                         source,

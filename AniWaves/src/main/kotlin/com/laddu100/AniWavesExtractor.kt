@@ -150,7 +150,6 @@ class AniWavesFilemoon : ExtractorApi() {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        // Filemoon-type extractors pack the video URL in a packed/eval JS
         val response = app.get(url, referer = referer ?: "https://aniwaves.ru/")
         val html = response.text
 
@@ -158,7 +157,6 @@ class AniWavesFilemoon : ExtractorApi() {
         val packed = packedRegex.find(html)?.value
 
         if (packed != null) {
-            // The packed script usually contains file:"https://...m3u8"
             val unpackedUrls = Regex("""https?://[^\s"'\\]+\.m3u8[^\s"'\\]*""").findAll(packed)
             for (match in unpackedUrls) {
                 callback.invoke(

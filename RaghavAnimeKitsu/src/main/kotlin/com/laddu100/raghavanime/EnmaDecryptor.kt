@@ -33,9 +33,6 @@ object EnmaDecryptor {
 
     private val initScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
-    // the shared decrypt WebView keeps per-call state (window._pendingEnc),
-    // so concurrent decrypts corrupt each other; this lock serializes them
-    // and keeps main thread WebView traffic bounded
     private val decryptMutex = Mutex()
 
     fun setContext(context: Context) {
@@ -200,7 +197,7 @@ object EnmaDecryptor {
     suspend fun fetchAndDecrypt(url: String, headers: Map<String, String>): String? {
         if (!initialized) startInit()
         return try {
-            val encrypted = com.lagradost.cloudstream3.app.get(url, headers = headers, timeout = 15_000L).text
+            val encrypted = com.lagradost.cloudstream3.app.get(url, headers = headers, timeout = 15L).text
             if (encrypted.isBlank()) return null
             val trimmed = encrypted.trim()
             if (trimmed.startsWith("{") || trimmed.startsWith("[")) return trimmed

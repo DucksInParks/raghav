@@ -569,7 +569,7 @@ suspend fun anilistQuery(query: String, variables: Map<String, Any?>): String {
             ANILIST_URL,
             headers = ANILIST_HEADERS,
             requestBody = requestData,
-            timeout = 15_000L
+            timeout = 15L
         )
         val text = response.text
         if (text.isNotBlank() && !text.contains("\"errors\"")) {

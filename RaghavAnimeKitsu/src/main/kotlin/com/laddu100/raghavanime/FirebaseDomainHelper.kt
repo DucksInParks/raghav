@@ -15,16 +15,13 @@ object FirebaseDomainHelper {
     @Volatile
     private var lastLoadTime: Long = 0L
 
-    @Volatile
-    private var everLoadedSuccessfully: Boolean = false
-
     private suspend fun load(force: Boolean = false) {
         val now = System.currentTimeMillis()
-        if (!force && everLoadedSuccessfully && now - lastLoadTime < CACHE_TTL_MS) {
+        if (!force && now - lastLoadTime < CACHE_TTL_MS) {
             return
         }
         try {
-            val response = app.get(URL, timeout = 5000L).text
+            val response = app.get(URL, timeout = 5L).text
             val parsed = parseJson<Map<String, Any?>>(response)
             domains = parsed.mapNotNull { (k, v) ->
                 val strVal = when (v) {
@@ -34,11 +31,9 @@ object FirebaseDomainHelper {
                 }
                 strVal?.takeIf { it.isNotBlank() }?.let { k to it.removeSuffix("/") }
             }.toMap()
-            lastLoadTime = now
-            everLoadedSuccessfully = true
-        } catch (e: Exception) {
-            lastLoadTime = now
+        } catch (_: Exception) {
         }
+        lastLoadTime = now
     }
 
     suspend fun getDomain(key: String): String? {

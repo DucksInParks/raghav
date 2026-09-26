@@ -152,7 +152,6 @@ object FlixProxy {
                 else -> send404(conn)
             }
         } catch (e: Exception) {
-            // one bad request must not kill the proxy thread; finally closes the socket
         } finally {
             try { conn.close() } catch (_: Exception) {}
         }
@@ -423,7 +422,6 @@ object FlixProxy {
                 val raw = fetchBytes(url) ?: return@execute
                 cachePut(url, unwrapBytes(raw))
             } catch (e: Exception) {
-                // a failed prefetch only skips the cache; finally releases the slot
             } finally {
                 inFlight.remove(url)
             }
