@@ -59,6 +59,7 @@ class DonationDialogFragment : DialogFragment() {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private var dismissTicker: Runnable? = null
+    private var dismissButton: Button? = null
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
         val dialog = super.onCreateDialog(savedInstanceState)
@@ -181,12 +182,13 @@ class DonationDialogFragment : DialogFragment() {
         })
 
         val statsRow = LinearLayout(ctx).apply {
-            orientation = LinearLayout.HORIZONTAL
-            gravity = Gravity.CENTER_VERTICAL
+            orientation = LinearLayout.VERTICAL
             layoutParams = LinearLayout.LayoutParams(-1, -2)
         }
         statsRow.addView(statChip(ctx, density, "100% Free", RED))
-        statsRow.addView(statChip(ctx, density, "30+ Extensions", RED_SOFT))
+        val fixChip = statChip(ctx, density, "Constant Fixes and Maintenance", RED_SOFT)
+        (fixChip.layoutParams as LinearLayout.LayoutParams).topMargin = dp(density, 6)
+        statsRow.addView(fixChip)
         hero.addView(statsRow)
 
         val upiRow = LinearLayout(ctx).apply {
@@ -259,7 +261,7 @@ class DonationDialogFragment : DialogFragment() {
         })
 
         btnSection.addView(Button(ctx).apply {
-            text = "Join Discord For More Content"
+            text = "Join Discord"
             textSize = 13f
             setTextColor(Color.WHITE)
             setAllCaps(false)
@@ -325,6 +327,7 @@ class DonationDialogFragment : DialogFragment() {
     }
 
     private fun startDismissCountdown(dismissBtn: Button) {
+        dismissButton = dismissBtn
         var secondsLeft = DISMISS_SECONDS
         val ticker = object : Runnable {
             override fun run() {
@@ -345,6 +348,7 @@ class DonationDialogFragment : DialogFragment() {
     private fun stopCountdown() {
         dismissTicker?.let { mainHandler.removeCallbacks(it) }
         dismissTicker = null
+        dismissButton?.text = "Maybe Later"
     }
 
     private fun statChip(
@@ -362,9 +366,7 @@ class DonationDialogFragment : DialogFragment() {
                 cornerRadius = dp(density, 8f)
                 setStroke(dp(density, 1), Color.parseColor(STROKE))
             }
-            layoutParams = LinearLayout.LayoutParams(-2, -2).also {
-                it.rightMargin = dp(density, 8)
-            }
+            layoutParams = LinearLayout.LayoutParams(-2, -2)
             addView(TextView(ctx).apply {
                 text = label
                 textSize = 11.5f
