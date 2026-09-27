@@ -57,6 +57,9 @@ class DonationDialogFragment : DialogFragment() {
         private const val DISCORD_DARK = "#4752C4"
     }
 
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private var dismissTicker: Runnable? = null
+
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
         val dialog = super.onCreateDialog(savedInstanceState)
         dialog.requestWindowFeature(Window.FEATURE_NO_TITLE)
@@ -120,7 +123,7 @@ class DonationDialogFragment : DialogFragment() {
         }
 
         badgeRow.addView(TextView(ctx).apply {
-            text = "🔥 Raghav Repo  •  raghav ↗"
+            text = "Raghav Repo  •  raghav ↗"
             textSize = 11f
             typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.parseColor(RED))
@@ -132,7 +135,10 @@ class DonationDialogFragment : DialogFragment() {
             }
             isClickable = true
             isFocusable = true
-            setOnClickListener { openUrl(ctx, REPO_URL) }
+            setOnClickListener {
+                stopCountdown()
+                openUrl(ctx, REPO_URL)
+            }
             layoutParams = LinearLayout.LayoutParams(-2, -2)
         })
 
@@ -179,8 +185,8 @@ class DonationDialogFragment : DialogFragment() {
             gravity = Gravity.CENTER_VERTICAL
             layoutParams = LinearLayout.LayoutParams(-1, -2)
         }
-        statsRow.addView(statChip(ctx, density, "🔓", "100% Free", RED))
-        statsRow.addView(statChip(ctx, density, "📦", "30+ Extensions", RED_SOFT))
+        statsRow.addView(statChip(ctx, density, "100% Free", RED))
+        statsRow.addView(statChip(ctx, density, "30+ Extensions", RED_SOFT))
         hero.addView(statsRow)
 
         val upiRow = LinearLayout(ctx).apply {
@@ -229,7 +235,7 @@ class DonationDialogFragment : DialogFragment() {
         }
 
         btnSection.addView(Button(ctx).apply {
-            text = "❤️ Donate"
+            text = "Donate"
             textSize = 15f
             setTextColor(Color.WHITE)
             setAllCaps(false)
@@ -253,7 +259,7 @@ class DonationDialogFragment : DialogFragment() {
         })
 
         btnSection.addView(Button(ctx).apply {
-            text = "🎮 Join Discord For More Content"
+            text = "Join Discord For More Content"
             textSize = 13f
             setTextColor(Color.WHITE)
             setAllCaps(false)
@@ -313,12 +319,13 @@ class DonationDialogFragment : DialogFragment() {
 
         startDismissCountdown(dismissBtn)
 
+        root.setOnClickListener { stopCountdown() }
+
         return root
     }
 
     private fun startDismissCountdown(dismissBtn: Button) {
         var secondsLeft = DISMISS_SECONDS
-        val handler = Handler(Looper.getMainLooper())
         val ticker = object : Runnable {
             override fun run() {
                 secondsLeft--
@@ -326,21 +333,23 @@ class DonationDialogFragment : DialogFragment() {
                     if (isAdded) dismissAllowingStateLoss()
                 } else {
                     dismissBtn.text = "Maybe Later ($secondsLeft)"
-                    handler.postDelayed(this, 1000L)
+                    mainHandler.postDelayed(this, 1000L)
                 }
             }
         }
-        handler.postDelayed(ticker, 1000L)
-        dismissBtn.setOnClickListener {
-            handler.removeCallbacks(ticker)
-            dismissAllowingStateLoss()
-        }
+        dismissTicker = ticker
+        mainHandler.postDelayed(ticker, 1000L)
+        dismissBtn.setOnClickListener { dismissAllowingStateLoss() }
+    }
+
+    private fun stopCountdown() {
+        dismissTicker?.let { mainHandler.removeCallbacks(it) }
+        dismissTicker = null
     }
 
     private fun statChip(
         ctx: Context,
         density: Float,
-        icon: String,
         label: String,
         color: String
     ): LinearLayout {
@@ -356,13 +365,6 @@ class DonationDialogFragment : DialogFragment() {
             layoutParams = LinearLayout.LayoutParams(-2, -2).also {
                 it.rightMargin = dp(density, 8)
             }
-            addView(TextView(ctx).apply {
-                text = icon
-                textSize = 13f
-                layoutParams = LinearLayout.LayoutParams(-2, -2).also {
-                    it.rightMargin = dp(density, 5)
-                }
-            })
             addView(TextView(ctx).apply {
                 text = label
                 textSize = 11.5f
@@ -390,11 +392,13 @@ class DonationDialogFragment : DialogFragment() {
     }
 
     override fun onDismiss(dialog: DialogInterface) {
+        stopCountdown()
         super.onDismiss(dialog)
         DonationManager.onDialogDismissed()
     }
 
     override fun onDestroy() {
+        stopCountdown()
         super.onDestroy()
         DonationManager.onDialogDismissed()
     }
