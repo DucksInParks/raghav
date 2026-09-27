@@ -29,6 +29,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
+import com.raghav.donation.DonationManager
 
 class RaghavAnime : MainAPI() {
     override var mainUrl = "https://graphql.anilist.co"
@@ -164,6 +165,7 @@ class RaghavAnime : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         if (request.data == "RECOMMEND") {
             if (!RaghavAnimeFeatures.isEnabled("recommendations")) {
                 return newHomePageResponse(request.name, emptyList())

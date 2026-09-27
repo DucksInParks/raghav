@@ -15,6 +15,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.delay
 import java.net.URLEncoder
 import kotlinx.coroutines.CancellationException
+import com.raghav.donation.DonationManager
 
 class RaghavEnma : MainAPI() {
     override var mainUrl = "https://www.enma.lol"
@@ -134,6 +135,7 @@ class RaghavEnma : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         val response = try {
             fetchApi("${request.data}?page=$page")
         } catch (e: Exception) {

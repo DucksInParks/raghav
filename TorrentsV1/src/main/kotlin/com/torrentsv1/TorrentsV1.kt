@@ -17,6 +17,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.net.URLEncoder
+import com.raghav.donation.DonationManager
 
 private const val ANILIST_URL = "https://graphql.anilist.co"
 private const val ANIZIP_API = "https://api.ani.zip"
@@ -301,6 +302,7 @@ class TorrentsV1 : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         val items = try {
             when {
                 request.data.startsWith("anilist_") -> {

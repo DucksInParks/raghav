@@ -30,6 +30,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.ConcurrentHashMap
+import com.raghav.donation.DonationManager
 
 class Miruro : MainAPI() {
 
@@ -88,6 +89,7 @@ class Miruro : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("miruro") ?: mainUrl
         MiruroCloudflare.setWorkingDomain(mainUrl)
         val query = when (request.data) {

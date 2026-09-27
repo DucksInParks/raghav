@@ -14,6 +14,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.CancellationException
+import com.raghav.donation.DonationManager
 
 class RaghavTwoDHive : MainAPI() {
     override var mainUrl = "https://2dhive.com"
@@ -83,6 +84,7 @@ class RaghavTwoDHive : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("twodhive") ?: mainUrl
         val url = if (page > 1) {
             "$mainUrl/?list=${request.data}&page=$page"

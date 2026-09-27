@@ -9,6 +9,7 @@ import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
 import kotlinx.coroutines.CancellationException
+import com.raghav.donation.DonationManager
 
 class RaghavAnikoto : MainAPI() {
     override var mainUrl = "https://anikototv.to"
@@ -38,6 +39,7 @@ class RaghavAnikoto : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("anikoto") ?: mainUrl
         val doc = app.get("${request.data}?page=$page", headers = browserHeaders).document
         val items = doc.select("div.ani.items > div.item").mapNotNull { it.toSearchResult() }

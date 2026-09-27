@@ -14,6 +14,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.network.WebViewResolver
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import com.raghav.donation.DonationManager
 
 class TimStreamsProvider : MainAPI() {
     override var mainUrl = "https://timstreams.st"
@@ -89,6 +90,7 @@ class TimStreamsProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         val lists = mutableListOf<HomePageList>()
 
         try {

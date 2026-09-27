@@ -8,6 +8,7 @@ import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import java.net.URLEncoder
+import com.raghav.donation.DonationManager
 
 private const val TAG = "Kdesa"
 
@@ -162,6 +163,7 @@ class KdesaProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         return try {
             var path: String
             var defType: String? = null

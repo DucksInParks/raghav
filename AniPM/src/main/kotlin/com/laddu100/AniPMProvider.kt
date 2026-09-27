@@ -29,6 +29,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.ConcurrentHashMap
+import com.raghav.donation.DonationManager
 
 class AniPMProvider : MainAPI() {
     override var mainUrl = AniPMApi.MAIN_URL
@@ -55,6 +56,7 @@ class AniPMProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         return when (request.data) {
             "latest" -> latestPage(page, request.name)
             "movies" -> browsePage("popular", page, "Movie", request.name)

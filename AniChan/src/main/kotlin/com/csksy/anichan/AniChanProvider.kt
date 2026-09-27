@@ -28,6 +28,7 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import com.raghav.donation.DonationManager
 
 class AniChanProvider : MainAPI() {
 
@@ -53,6 +54,7 @@ class AniChanProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
+        DonationManager.checkAndShow()
         val items = when (request.data) {
             "trending" -> AniChanApi.trending(page)
             "airing" -> AniChanApi.airing(page)

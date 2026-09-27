@@ -12,6 +12,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import com.lagradost.api.Log
+import com.raghav.donation.DonationManager
 
 class NineAnime : MainAPI() {
     private val TAG = "NineAnime"
@@ -32,6 +33,7 @@ class NineAnime : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("nineanime") ?: mainUrl
         val url = if (page > 1) "$mainUrl/page/$page/" else "$mainUrl/"
         val doc = app.get(url).document

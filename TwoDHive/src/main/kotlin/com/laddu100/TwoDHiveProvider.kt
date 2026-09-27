@@ -19,6 +19,7 @@ import javax.crypto.Cipher
 import javax.crypto.Mac
 import javax.crypto.spec.IvParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import com.raghav.donation.DonationManager
 
 // megaplay encrypts the enc stream url, the AES seeds live in lib/newclient.min.js and move over time
 object MegaPlayCipher {
@@ -155,6 +156,7 @@ class TwoDHiveProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("twodhive") ?: mainUrl
         val url = if (page > 1) {
             "$mainUrl/?list=${request.data}&page=$page"

@@ -30,6 +30,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import java.net.URLEncoder
+import com.raghav.donation.DonationManager
 
 class RaghavAnime : MainAPI() {
     override var mainUrl = "https://kitsu.io"
@@ -155,6 +156,7 @@ class RaghavAnime : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         if (request.data == "RECOMMEND") {
             if (!RaghavAnimeFeatures.isEnabled("recommendations")) {
                 return newHomePageResponse(request.name, emptyList())

@@ -19,6 +19,7 @@ import kotlin.Pair
 import okhttp3.Interceptor
 import okhttp3.OkHttpClient
 import okhttp3.Response
+import com.raghav.donation.DonationManager
 
 class LIVETVLiveEventsProvider(
     private val customName: String = "LIVE TV Live Events",
@@ -140,6 +141,7 @@ class LIVETVLiveEventsProvider(
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         val events = if (customCatLink != null) {
             LIVETVProviderManager.fetchCustomEvents(customCatLink)
         } else {

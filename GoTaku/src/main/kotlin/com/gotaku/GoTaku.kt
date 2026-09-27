@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.raghav.donation.DonationManager
 
 class GoTaku : MainAPI() {
     override var mainUrl = "https://gotaku.to"
@@ -37,6 +38,7 @@ class GoTaku : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         val params = mutableMapOf(
             "sort" to "latest",
             "limit" to "28",

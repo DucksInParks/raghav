@@ -12,6 +12,7 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties
 import com.fasterxml.jackson.annotation.JsonProperty
 import org.jsoup.Jsoup
 import java.net.URLEncoder
+import com.raghav.donation.DonationManager
 
 class AnimeWorldProvider : MainAPI() {
     override var mainUrl = "https://watchanimeworld.top"
@@ -61,6 +62,7 @@ class AnimeWorldProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         loadFirebaseUrl()
         return try {
             val response = animeWorldGet(mainUrl)

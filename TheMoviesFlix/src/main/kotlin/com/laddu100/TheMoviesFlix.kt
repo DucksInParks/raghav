@@ -12,6 +12,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
+import com.raghav.donation.DonationManager
 
 private const val TAG = "TMF"
 
@@ -50,6 +51,7 @@ class TheMoviesFlix : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("themoviesflix") ?: mainUrl
         val path = request.data
         val url = if (path.isBlank()) {

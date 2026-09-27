@@ -12,6 +12,7 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
+import com.raghav.donation.DonationManager
 
 class DamiTVProvider : MainAPI() {
 
@@ -325,6 +326,7 @@ class DamiTVProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
+        DonationManager.checkAndShow()
         loadFirebaseUrl()
         val lists = mutableListOf<HomePageList>()
 

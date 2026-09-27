@@ -11,6 +11,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import java.util.concurrent.ConcurrentHashMap
+import com.raghav.donation.DonationManager
 
 class AnidapProvider : MainAPI() {
     override var mainUrl = "https://anidap.lol"
@@ -92,6 +93,7 @@ class AnidapProvider : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("anidap") ?: mainUrl
         return try {
             when (request.name) {

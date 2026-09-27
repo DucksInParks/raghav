@@ -30,6 +30,7 @@ import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import org.jsoup.Jsoup
 import org.jsoup.nodes.Element
+import com.raghav.donation.DonationManager
 
 class AnimeKaiProvider : MainAPI() {
     override var mainUrl = "https://animekai.ro"
@@ -87,6 +88,7 @@ class AnimeKaiProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         val url = "$mainUrl/filter?${request.data}&page=$page"
         val home = try {
             parseListing(app.get(url, referer = "$mainUrl/home").text)

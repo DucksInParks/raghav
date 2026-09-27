@@ -26,6 +26,7 @@ import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.Score
 import android.content.Context
+import com.raghav.donation.DonationManager
 
 class Miruro : MainAPI() {
 
@@ -68,6 +69,7 @@ class Miruro : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
 
         val query = when (request.data) {
             "TRENDING" -> TRENDING_QUERY

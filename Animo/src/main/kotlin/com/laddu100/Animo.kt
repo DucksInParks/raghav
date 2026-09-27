@@ -12,6 +12,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import com.lagradost.cloudstream3.newSubtitleFile
 import java.net.URLEncoder
+import com.raghav.donation.DonationManager
 
 class Animo : MainAPI() {
     override var mainUrl = "https://4animo.xyz"
@@ -46,6 +47,7 @@ class Animo : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("animo") ?: mainUrl
         return try {
             val url = "$apiUrl/anime/${request.data}?page=$page&limit=20"

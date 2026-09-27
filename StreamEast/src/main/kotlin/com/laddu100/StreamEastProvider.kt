@@ -14,6 +14,7 @@ import java.net.InetAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.delay
+import com.raghav.donation.DonationManager
 
 class StreamEastProvider : MainAPI() {
 
@@ -236,6 +237,7 @@ class StreamEastProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
+        DonationManager.checkAndShow()
         loadFirebaseUrl()
         val lists = mutableListOf<HomePageList>()
         val liveItems = mutableListOf<SearchResponse>()

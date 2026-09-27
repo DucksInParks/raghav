@@ -27,6 +27,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import java.net.URLEncoder
+import com.raghav.donation.DonationManager
 
 class AniWaves : MainAPI() {
     override var mainUrl = "https://aniwaves.ru"
@@ -57,6 +58,7 @@ class AniWaves : MainAPI() {
     )
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("aniwaves") ?: mainUrl
         val path = request.data
         val url = if (path.startsWith("filter")) {

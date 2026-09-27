@@ -25,6 +25,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import com.raghav.donation.DonationManager
 
 private const val TAG = "Multimovies"
 
@@ -76,6 +77,7 @@ class MultimoviesProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         refreshDomain()
         val base = request.data.trimEnd('/')
         val url = if (page <= 1) "$mainUrl$base/" else "$mainUrl$base/page/$page/"

@@ -12,6 +12,7 @@ import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
+import com.raghav.donation.DonationManager
 
 class ReplayZoneProvider : MainAPI() {
     override var mainUrl = "https://replay-exc.pages.dev"
@@ -111,6 +112,7 @@ class ReplayZoneProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("replayzone") ?: mainUrl
         val lists = mutableListOf<HomePageList>()
 

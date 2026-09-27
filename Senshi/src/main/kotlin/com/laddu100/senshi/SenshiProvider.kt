@@ -33,6 +33,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
+import com.raghav.donation.DonationManager
 
 class SenshiProvider : MainAPI() {
     override var mainUrl = "https://senshi.to"
@@ -116,6 +117,7 @@ class SenshiProvider : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse? {
+        DonationManager.checkAndShow()
         return try {
             when (request.data) {
                 "latest" -> {

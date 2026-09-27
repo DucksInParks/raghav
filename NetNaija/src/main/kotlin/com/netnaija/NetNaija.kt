@@ -32,6 +32,7 @@ import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
+import com.raghav.donation.DonationManager
 
 class NetNaija : MainAPI() {
     override var mainUrl = "https://netnaija.film"
@@ -272,6 +273,7 @@ class NetNaija : MainAPI() {
         title.replace(Regex("[^\\p{L}\\p{N} &+\\[\\]().'-]"), "").trim()
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("netnaija") ?: mainUrl
         val key = request.data
         return try {

@@ -1,4 +1,8 @@
-version = 4
+version = 5
+
+dependencies {
+    implementation("androidx.appcompat:appcompat:1.7.0")
+}
 
 cloudstream {
     language = "en"

@@ -1,9 +1,13 @@
-version = 4
+version = 5
 
 android {
     buildFeatures {
         buildConfig = true
     }
+}
+
+dependencies {
+    implementation("androidx.appcompat:appcompat:1.7.0")
 }
 
 cloudstream {

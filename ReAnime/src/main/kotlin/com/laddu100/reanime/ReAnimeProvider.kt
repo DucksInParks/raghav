@@ -35,6 +35,7 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 import java.util.concurrent.atomic.AtomicBoolean
+import com.raghav.donation.DonationManager
 
 class ReAnimeProvider : MainAPI() {
 
@@ -64,6 +65,7 @@ class ReAnimeProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse? {
+        DonationManager.checkAndShow()
         when (request.data) {
             "popular" -> {
                 val items = ReAnimeApi.searchSorted("popularity_desc", page)

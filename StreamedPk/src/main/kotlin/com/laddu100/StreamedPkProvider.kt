@@ -20,6 +20,7 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.Dispatchers
 import kotlin.coroutines.resume
 import android.util.Log
+import com.raghav.donation.DonationManager
 
 class StreamedPkProvider : MainAPI() {
 
@@ -165,6 +166,7 @@ class StreamedPkProvider : MainAPI() {
         page: Int,
         request: MainPageRequest
     ): HomePageResponse {
+        DonationManager.checkAndShow()
         mainUrl = FirebaseDomainHelper.getDomain("streamedpk") ?: mainUrl
         val lists = mutableListOf<HomePageList>()
         var fetchFailed = false
