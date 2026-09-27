@@ -81,20 +81,6 @@ data class StreamBetaLink(
 )
 
 @JsonIgnoreProperties(ignoreUnknown = true)
-data class RelatedEpisode(
-    @JsonProperty("id") val id: String? = null,
-    @JsonProperty("ep_name") val epName: String? = null,
-    @JsonProperty("s") val s: Int? = null,
-    @JsonProperty("e") val e: Int? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
-data class RelatedSeason(
-    @JsonProperty("title") val title: String? = null,
-    @JsonProperty("episodes") val episodes: List<RelatedEpisode>? = null
-)
-
-@JsonIgnoreProperties(ignoreUnknown = true)
 data class GoFileAccountData(
     @JsonProperty("token") val token: String? = null
 )
@@ -133,6 +119,7 @@ class RareAnimesProvider : MainAPI() {
     private val TAG = "RareAnimes"
     private val SOURCE = "Rare Toons India"
     private val EPISODE_HEADER = Regex("""^(?:Episode|EP)\s*[.\-]?\s*(\d{1,3})\b""", RegexOption.IGNORE_CASE)
+    private val SEASON_MARKER = Regex("""^\s*Seasons?\s*[-\u2013:.]?\s*(\d{1,2})\s*$""", RegexOption.IGNORE_CASE)
     private val GOFILE_WT_SECRET = "12af056dacea0b"
 
     override val mainPage = mainPageOf(
@@ -212,9 +199,7 @@ class RareAnimesProvider : MainAPI() {
 
     private data class ArchiveEpisode(
         val name: String,
-        val variants: List<RAIVariant>,
-        val s: Int? = null,
-        val e: Int? = null
+        val variants: List<RAIVariant>
     )
 
     private data class ArchiveResult(
@@ -280,6 +265,7 @@ class RareAnimesProvider : MainAPI() {
                     if (t.isNotBlank()) context = t
                 }
                 "a" -> {
+                    if (isProseRow(el)) continue
                     val href = el.attr("abs:href")
                     val text = el.text().trim()
                     when {
@@ -294,6 +280,31 @@ class RareAnimesProvider : MainAPI() {
             }
         }
         return sources.distinctBy { it.url }
+    }
+
+    // bare links inside long paragraphs are seo keyword links, real buttons are always bracket wrapped
+    private fun isProseRow(a: Element): Boolean {
+        val row = blockRowOf(a)
+        val tag = row.tagName().lowercase()
+        if (tag == "p" || tag == "li") {
+            if (row.text().length <= 80) return false
+            val html = row.html()
+            val total = Regex("""<a\s""").findAll(html).count()
+            val wrapped = Regex("""\[\s*<a\s""").findAll(html).count()
+            return total == 0 || wrapped != total
+        }
+        return false
+    }
+
+    private fun blockRowOf(a: Element): Element {
+        var cur = a
+        while (true) {
+            val parent = cur.parent() ?: return cur
+            when (parent.tagName().lowercase()) {
+                "p", "li", "h1", "h2", "h3", "h4", "h5", "h6" -> return parent
+            }
+            cur = parent
+        }
     }
 
     private fun archiveSourceName(title: String, fallback: String): String {
@@ -340,22 +351,24 @@ class RareAnimesProvider : MainAPI() {
         var current: DirectEpisode? = null
         var sectionContext = ""
         var sectionKey = ""
+        var sectionSeason: Int? = null
         val usedOrphanNames = mutableSetOf<String>()
         for (el in content.children()) {
             val tag = el.tagName().lowercase()
             if (tag == "hr") continue
             val text = el.text().trim()
             if (text.isBlank()) continue
-            val links = el.select(
-                "a[href*=codedew.com/zipper/], a[href*=codedew.com/zipcloud/]"
-            )
 
             val headerMatch = EPISODE_HEADER.find(text)
+            val links = el.select(
+                "a[href*=codedew.com/zipper/], a[href*=codedew.com/zipcloud/]"
+            ).filter { !isProseRow(it) }
+
             var startedEpisode = false
             if (headerMatch != null) {
                 val epNum = headerMatch.groupValues[1].toIntOrNull()
                 if (epNum != null) {
-                    current = DirectEpisode(defaultSeason, epNum, text, mutableListOf())
+                    current = DirectEpisode(sectionSeason ?: defaultSeason, epNum, text, mutableListOf())
                     episodes.add(current)
                     startedEpisode = true
                     if (links.isEmpty()) continue
@@ -363,7 +376,10 @@ class RareAnimesProvider : MainAPI() {
             }
 
             if (links.isEmpty()) {
-                if (tag.startsWith("h") && el.select("a").isEmpty()) {
+                val marker = SEASON_MARKER.find(text)?.groupValues?.get(1)?.toIntOrNull()
+                val isHeading = tag.startsWith("h") && el.select("a").isEmpty()
+                if (isHeading || marker != null) {
+                    if (marker != null) sectionSeason = marker
                     sectionContext = text
                     sectionKey = dubKeyOf(text)
                     if (!startedEpisode) current = null
@@ -395,25 +411,6 @@ class RareAnimesProvider : MainAPI() {
         return DirectParse(episodes, orphans)
     }
 
-    private fun parseRelatedData(html: String): Map<String, RelatedSeason> {
-        return try {
-            val m = Regex("""const\s+relatedData\s*=\s*(\{.*?\})\s*;""", RegexOption.DOT_MATCHES_ALL)
-                .find(html) ?: return emptyMap()
-            val parsed = parseJson<Map<String, RelatedSeason>>(m.groupValues[1])
-            // MOV_ entries live on their own post pages, drop them when real seasons exist
-            val hasSeasons = parsed.keys.any { it.startsWith("SEA", ignoreCase = true) }
-            val hasMovies = parsed.keys.any { it.startsWith("MOV", ignoreCase = true) }
-            val filtered = if (hasSeasons && hasMovies) {
-                parsed.filterKeys { !it.startsWith("MOV", ignoreCase = true) }
-            } else {
-                parsed
-            }
-            filtered.filterValues { it.episodes.orEmpty().isNotEmpty() }
-        } catch (e: Exception) {
-            emptyMap()
-        }
-    }
-
     private suspend fun loadArchive(
         url: String,
         sourceLabel: String,
@@ -429,41 +426,6 @@ class RareAnimesProvider : MainAPI() {
             val dubKey = dubKeyOf(docTitle).ifBlank { contextKey }
             val sourceName = archiveSourceName(docTitle, sourceLabel)
             val eps = parseArchiveEpisodes(html)
-
-            if (sourceName == "WatchMultiQuality" && eps.isNotEmpty()) {
-                val first = eps.first()
-                val related = try {
-                    when (val t = CodedewResolver.resolveUrl(first.second)) {
-                        is ResolvedTarget.Argon -> {
-                            val mq = raiGet("https://$CODEDEW_HOST/multiquality/?url=${t.code}")
-                            parseRelatedData(mq.text)
-                        }
-                        else -> emptyMap()
-                    }
-                } catch (e: Exception) {
-                    Log.e(TAG, "mq probe: ${e.message}")
-                    emptyMap()
-                }
-                val relatedEps = related.values.flatMap { season ->
-                    season.episodes.orEmpty().mapIndexedNotNull { idx, ep ->
-                        val id = ep.id ?: return@mapIndexedNotNull null
-                        ArchiveEpisode(
-                            name = ep.epName?.takeIf { it.isNotBlank() }
-                                ?: ep.e?.let { "Episode $it" }
-                                ?: "Episode ${idx + 1}",
-                            variants = listOf(
-                                RAIVariant("WatchMultiQuality", "https://$ARGON_HOST/embed/$id", dubKey),
-                                RAIVariant("DLBeta", "https://$ARGON_HOST/downlead/$id/", dubKey)
-                            ),
-                            s = ep.s,
-                            e = ep.e
-                        )
-                    }
-                }
-                if (relatedEps.isNotEmpty()) {
-                    return ArchiveResult(dubKey, sourceName, relatedEps)
-                }
-            }
 
             when {
                 eps.size > 1 -> ArchiveResult(
@@ -526,11 +488,12 @@ class RareAnimesProvider : MainAPI() {
             val e = m.groupValues[2].toIntOrNull() ?: return null
             return s to e
         }
+        val sn = HUB_SEASON_NUMBER.find(name)?.groupValues?.get(1)?.toIntOrNull()
         val e2 = Regex("""\bE\s*(\d{1,3})\b""", RegexOption.IGNORE_CASE).find(name)
             ?: Regex("""\bEpisode\s+(\d{1,3})\b""", RegexOption.IGNORE_CASE).find(name)
         if (e2 != null) {
             val e = e2.groupValues[1].toIntOrNull() ?: return null
-            return null to e
+            return sn to e
         }
         return null
     }
@@ -582,7 +545,9 @@ class RareAnimesProvider : MainAPI() {
         val sources: List<SourceRef>,
         val direct: DirectParse,
         val archives: List<ArchiveResult>,
-        val defaultSeason: Int
+        val defaultSeason: Int,
+        val finalUrl: String = "",
+        val seasonKnown: Boolean = false
     )
 
     private val HUB_SEASON_NUMBER =
@@ -678,8 +643,8 @@ class RareAnimesProvider : MainAPI() {
             val suffix = if (multiDub && archive.dubKey.isNotBlank()) " ${dubLabel(archive.dubKey)}" else ""
             archive.episodes.forEachIndexed { idx, ep ->
                 val parsed = parseEpisodeNumber(ep.name)
-                val season = ep.s ?: parsed?.first ?: content.defaultSeason
-                val epNum = ep.e ?: parsed?.second ?: (idx + 1)
+                val season = parsed?.first ?: content.defaultSeason
+                val epNum = parsed?.second ?: (idx + 1)
                 val used = mutableSetOf<String>()
                 for (v in ep.variants) {
                     var name = "${v.n}$suffix"
@@ -757,12 +722,16 @@ class RareAnimesProvider : MainAPI() {
         return try {
             val response = raiGet(link.url)
             val doc = Jsoup.parse(response.text)
-            if (parseHubHeadings(doc).count { it.kind == "season" || it.kind == "movie" } >= 2) {
+            if (isHubPage(doc)) {
                 null
             } else {
                 val subMeta = extractMeta(doc)
                 val subDefault = subMeta["season"]?.toIntOrNull() ?: 1
-                parsePageContent(doc, subDefault)
+                val content = parsePageContent(doc, subDefault)
+                content.copy(
+                    finalUrl = response.url,
+                    seasonKnown = pageHasSeasonIdentity(doc, content, subMeta)
+                )
             }
         } catch (e: Exception) {
             Log.e(TAG, "hub page ${link.url}: ${e.message}")
@@ -770,14 +739,65 @@ class RareAnimesProvider : MainAPI() {
         }
     }
 
+    private fun pageHasSeasonIdentity(doc: Document, content: PageContent, meta: Map<String, String>): Boolean {
+        if (meta.containsKey("season")) return true
+        for (archive in content.archives) {
+            for (ep in archive.episodes) {
+                if (parseEpisodeNumber(ep.name)?.first != null) return true
+            }
+        }
+        for (ep in content.direct.episodes) {
+            if (parseEpisodeNumber(ep.name)?.first != null) return true
+        }
+        val contentEl = doc.selectFirst("div.entry-content") ?: return false
+        return contentEl.select("h1,h2,h3,h4,h5,h6,p").any { SEASON_MARKER.matches(it.text().trim()) }
+    }
+
+    private fun isHubPage(doc: Document): Boolean {
+        if (parseHubHeadings(doc).count { it.kind == "season" || it.kind == "movie" } >= 2) return true
+        val probe = parseDirectEpisodes(doc, 1)
+        if (probe.episodes.isNotEmpty() || probe.orphans.isNotEmpty()) return false
+        if (extractSources(doc).isNotEmpty()) return false
+        return parseParagraphHubLinks(doc).size >= 4
+    }
+
+    private fun parseParagraphHubLinks(doc: Document): List<HubLink> {
+        val content = doc.selectFirst("div.entry-content") ?: return emptyList()
+        val out = mutableListOf<HubLink>()
+        val seen = mutableSetOf<String>()
+        for (p in content.select("p")) {
+            val candidates = p.select("a[href]").filter { isInternalPostLink(it.attr("abs:href")) }
+            if (candidates.size != 1) continue
+            val a = candidates.first()
+            val text = a.text().trim()
+            if (text.length < 8) continue
+            val rowText = p.text().trim()
+            val rest = rowText.replaceFirst(text, "").trim()
+            if (rest.length > 15) continue
+            val href = a.attr("abs:href")
+            if (!seen.add(href)) continue
+            val seasonNumber = HUB_SEASON_NUMBER.find(text)?.groupValues?.get(1)?.toIntOrNull()
+                ?: HUB_SEASON_NUMBER.find(rowText)?.groupValues?.get(1)?.toIntOrNull()
+            val movieNumber = if (seasonNumber == null) {
+                HUB_MOVIE_NUMBER.find(text)?.groupValues?.get(1)?.toIntOrNull()
+                    ?: HUB_MOVIE_NUMBER.find(rowText)?.groupValues?.get(1)?.toIntOrNull()
+            } else null
+            val kind = when {
+                seasonNumber != null -> "season"
+                movieNumber != null -> "movie"
+                else -> "extra"
+            }
+            out.add(HubLink(kind, seasonNumber ?: movieNumber, text, href))
+        }
+        return out
+    }
+
     private fun seasonEpisodesForLink(link: HubLink, content: PageContent): List<HubEpisode> {
         val episodes = buildSubPageEpisodes(content)
         val target = link.number ?: return episodes
-        val present = episodes.map { it.season }.toSet()
-        if (present.isEmpty() || present.contains(target)) return episodes
-        // shift the page's internal numbering onto the season the hub heading names
-        val offset = target - (present.minOrNull() ?: target)
-        return episodes.map { HubEpisode(it.season + offset, it.epNum, it.name, it.variants) }
+        // hub headings go stale when a post moves, the post itself is the safer source
+        if (content.seasonKnown) return episodes
+        return episodes.map { HubEpisode(target, it.epNum, it.name, it.variants) }
     }
 
     private suspend fun buildHubResponse(
@@ -791,23 +811,15 @@ class RareAnimesProvider : MainAPI() {
     ): LoadResponse? {
         val capped = links.take(40)
         val results = HashMap<Int, PageContent>(capped.size)
-        val coveredSeasons = mutableSetOf<Int>()
 
         for (chunkStart in capped.indices step 6) {
             val chunk = capped.withIndex().filter { it.index >= chunkStart && it.index < chunkStart + 6 }
             coroutineScope {
-                chunk.mapNotNull { (index, link) ->
-                    val covered = link.kind == "season" && link.number != null &&
-                        coveredSeasons.contains(link.number)
-                    if (covered) null else async { index to loadHubSubPage(link) }
+                chunk.map { (index, link) ->
+                    async { index to loadHubSubPage(link) }
                 }.awaitAll()
             }.forEach { (index, content) ->
-                if (content != null) {
-                    results[index] = content
-                    if (capped[index].kind == "season") {
-                        seasonEpisodesForLink(capped[index], content).forEach { coveredSeasons.add(it.season) }
-                    }
-                }
+                if (content != null) results[index] = content
             }
         }
 
@@ -821,29 +833,47 @@ class RareAnimesProvider : MainAPI() {
         val seasonNames = sortedMapOf<Int, String>()
         val movieEntries = mutableListOf<Pair<String, List<RAIVariant>>>()
         val extraSeries = mutableListOf<Pair<String, List<HubEpisode>>>()
+        val filledSeasons = HashMap<Int, String>()
+        val loadedUrls = mutableSetOf<String>()
 
         for ((index, link) in capped.withIndex()) {
             val content = results[index] ?: continue
-            val episodes = if (link.kind == "season") {
-                seasonEpisodesForLink(link, content)
-            } else {
-                buildSubPageEpisodes(content)
-            }
-            when {
-                link.kind == "season" -> {
-                    episodes.forEach { e ->
-                        e.variants.forEach { v -> addEp(e.season, e.epNum, e.name, v) }
+            val finalUrl = content.finalUrl.ifBlank { link.url }
+            val twin = !loadedUrls.add(finalUrl)
+            if (link.kind == "season") {
+                val episodes = seasonEpisodesForLink(link, content)
+                if (episodes.isEmpty()) {
+                    val variants = buildSubPageVariants(content)
+                    if (variants.isNotEmpty()) movieEntries.add(link.name to variants)
+                    continue
+                }
+                val landed = episodes.map { it.season }.toSet()
+                val conflict = landed.any { filledSeasons.containsKey(it) && filledSeasons[it] != finalUrl }
+                when {
+                    twin -> {
+                        if (link.number != null && landed.contains(link.number) &&
+                            !seasonNames.containsKey(link.number)
+                        ) {
+                            seasonNames[link.number] = link.name
+                        }
                     }
-                    if (link.number != null && episodes.isNotEmpty()) {
-                        seasonNames[link.number] = link.name
-                    }
-                    if (episodes.isEmpty()) {
-                        val variants = buildSubPageVariants(content)
-                        if (variants.isNotEmpty()) movieEntries.add(link.name to variants)
+                    conflict -> extraSeries.add(link.name to episodes)
+                    else -> {
+                        episodes.forEach { e ->
+                            e.variants.forEach { v -> addEp(e.season, e.epNum, e.name, v) }
+                        }
+                        landed.forEach { filledSeasons[it] = finalUrl }
+                        if (link.number != null && landed.contains(link.number)) {
+                            seasonNames[link.number] = link.name
+                        }
                     }
                 }
-                episodes.size > 1 -> extraSeries.add(link.name to episodes)
-                else -> {
+            } else {
+                if (twin) continue
+                val episodes = buildSubPageEpisodes(content)
+                if (episodes.size > 1) {
+                    extraSeries.add(link.name to episodes)
+                } else {
                     val variants = buildSubPageVariants(content)
                     if (variants.isNotEmpty()) movieEntries.add(link.name to variants)
                 }
@@ -861,11 +891,22 @@ class RareAnimesProvider : MainAPI() {
         movieEntries.forEachIndexed { idx, entry ->
             finalEpisodes.add(HubEpisode(moviesSeason, idx + 1, entry.first, entry.second.toMutableList()))
         }
-        extraSeries.forEach { entry ->
-            nextSeason += 1
-            seasonNames[nextSeason] = entry.first
-            entry.second.forEach { e ->
-                finalEpisodes.add(HubEpisode(nextSeason, e.epNum, e.name, e.variants))
+        extraSeries.forEach { (name, eps) ->
+            val internal = eps.map { it.season }.distinct().sorted()
+            if (internal.size > 1) {
+                internal.forEachIndexed { i, s ->
+                    nextSeason += 1
+                    seasonNames[nextSeason] = "$name - Season ${i + 1}"
+                    eps.filter { it.season == s }.forEach { e ->
+                        finalEpisodes.add(HubEpisode(nextSeason, e.epNum, e.name, e.variants))
+                    }
+                }
+            } else {
+                nextSeason += 1
+                seasonNames[nextSeason] = name
+                eps.forEach { e ->
+                    finalEpisodes.add(HubEpisode(nextSeason, e.epNum, e.name, e.variants))
+                }
             }
         }
 
@@ -958,9 +999,9 @@ class RareAnimesProvider : MainAPI() {
             }
             archive.episodes.forEachIndexed { idx, ep ->
                 val parsed = parseEpisodeNumber(ep.name)
-                if (parsed != null || ep.e != null) anyNumbered = true
-                val season = ep.s ?: parsed?.first ?: defaultSeason
-                val epNum = ep.e ?: parsed?.second ?: (idx + 1)
+                if (parsed != null) anyNumbered = true
+                val season = parsed?.first ?: defaultSeason
+                val epNum = parsed?.second ?: (idx + 1)
                 val idx0 = if (splitDubs) dubOrder.indexOf(archive.dubKey).let { if (it >= 0) it else 0 } else 0
                 ep.variants.forEach { v ->
                     addVariant(idx0, season, epNum, ep.name, RAIVariant(vName, v.u, archive.dubKey))
@@ -1076,8 +1117,20 @@ class RareAnimesProvider : MainAPI() {
                 it.text().trim()
             }.filter { it.isNotBlank() }.distinct().take(8)
 
-            val hubLinks = parseHubHeadings(doc)
-            if (hubLinks.count { it.kind == "season" || it.kind == "movie" } >= 2) {
+            var hubLinks = parseHubHeadings(doc)
+            var useHub = hubLinks.count { it.kind == "season" || it.kind == "movie" } >= 2
+            if (!useHub) {
+                // some collections list their seasons as plain paragraph links instead of headings
+                val probe = parseDirectEpisodes(doc, 1)
+                if (probe.episodes.isEmpty() && probe.orphans.isEmpty() && extractSources(doc).isEmpty()) {
+                    val paragraphLinks = parseParagraphHubLinks(doc)
+                    if (paragraphLinks.size >= 4) {
+                        hubLinks = paragraphLinks
+                        useHub = true
+                    }
+                }
+            }
+            if (useHub) {
                 val hub = try {
                     buildHubResponse(title, url, poster, year, plot, genres, hubLinks)
                 } catch (e: Exception) {
