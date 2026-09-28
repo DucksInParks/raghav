@@ -39,7 +39,7 @@ class DonationDialogFragment : DialogFragment() {
         private const val DISCORD_URL = "https://discord.gg/V9VC8w29U"
         private const val REPO_URL = "https://github.com/KSHITIJ8473/raghav"
 
-        private const val DISMISS_SECONDS = 5
+        private const val DISMISS_SECONDS = 9
 
         private const val BG = "#131012"
         private const val BG_HERO_TOP = "#1D1113"
@@ -162,7 +162,7 @@ class DonationDialogFragment : DialogFragment() {
         hero.addView(badgeRow)
 
         hero.addView(TextView(ctx).apply {
-            text = "❤️ Support My Work And Keep The Repo Alive"
+            text = "Support My Work And Keep The Repo Alive"
             textSize = 22f
             setTextColor(Color.WHITE)
             typeface = Typeface.DEFAULT_BOLD
@@ -198,14 +198,6 @@ class DonationDialogFragment : DialogFragment() {
                 it.topMargin = dp(density, 12)
             }
         }
-        upiRow.addView(TextView(ctx).apply {
-            text = "🇮🇳"
-            textSize = 12f
-            layoutParams = LinearLayout.LayoutParams(-2, -2).also {
-                it.rightMargin = dp(density, 7)
-                it.topMargin = dp(density, 1)
-            }
-        })
         upiRow.addView(TextView(ctx).apply {
             val sb = SpannableStringBuilder()
             val headStart = sb.length
