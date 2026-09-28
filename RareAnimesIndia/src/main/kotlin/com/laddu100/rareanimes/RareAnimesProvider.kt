@@ -317,6 +317,15 @@ class RareAnimesProvider : MainAPI() {
         }
     }
 
+    // linker pages sometimes label every row with the button name instead of the episode
+    private fun isSourceLabel(name: String): Boolean {
+        return when (name.trim().lowercase()) {
+            "multiquality", "watchmultiquality", "quickmulti", "watchnow",
+            "hubcloud", "mega", "zip", "download", "watch", "dlbeta" -> true
+            else -> false
+        }
+    }
+
     private fun parseArchiveEpisodes(html: String): List<Pair<String, String>> {
         val doc = Jsoup.parse(html)
         val content = doc.selectFirst("div.entry-content") ?: doc.body() ?: return emptyList()
@@ -645,6 +654,7 @@ class RareAnimesProvider : MainAPI() {
                 val parsed = parseEpisodeNumber(ep.name)
                 val season = parsed?.first ?: content.defaultSeason
                 val epNum = parsed?.second ?: (idx + 1)
+                val epName = if (isSourceLabel(ep.name)) "" else ep.name
                 val used = mutableSetOf<String>()
                 for (v in ep.variants) {
                     var name = "${v.n}$suffix"
@@ -653,29 +663,11 @@ class RareAnimesProvider : MainAPI() {
                         while (!used.add("$name $i")) i++
                         name = "$name $i"
                     }
-                    add(season, epNum, ep.name, RAIVariant(name, v.u, archive.dubKey))
+                    add(season, epNum, epName, RAIVariant(name, v.u, archive.dubKey))
                 }
             }
         }
 
-        val attachedUrls = out.values.flatMap { it.variants.map { v -> v.u } }.toHashSet()
-        val orphans = content.direct.orphans.filter { !attachedUrls.contains(it.u) }
-        if (orphans.isNotEmpty() && out.isNotEmpty()) {
-            val maxEntry = out.values.maxByOrNull { it.epNum }
-            val baseSeason = maxEntry?.season ?: content.defaultSeason
-            var num = maxEntry?.epNum ?: 0
-            val used = mutableSetOf<String>()
-            for (o in orphans) {
-                num += 1
-                var name = if (multiDub && o.k.isNotBlank()) "ZIP Batch ${dubLabel(o.k)}" else "ZIP Batch"
-                if (!used.add(name)) {
-                    var i = 2
-                    while (!used.add("$name $i")) i++
-                    name = "$name $i"
-                }
-                add(baseSeason, num, "ZIP Batch (Full Season)", RAIVariant(name, o.u, o.k))
-            }
-        }
         return out.values.toList()
     }
 
@@ -688,10 +680,14 @@ class RareAnimesProvider : MainAPI() {
         val multiDub = dubKeys.size >= 2
         for (archive in content.archives) {
             val suffix = if (multiDub && archive.dubKey.isNotBlank()) " ${dubLabel(archive.dubKey)}" else ""
-            archive.episodes.forEach { ep ->
+            archive.episodes.forEachIndexed { idx, ep ->
                 ep.variants.forEach { v ->
                     if (variants.none { it.u == v.u }) {
-                        val label = if (archive.episodes.size > 1) "${v.n}$suffix ${ep.name}" else "${v.n}$suffix"
+                        val label = when {
+                            archive.episodes.size == 1 -> "${v.n}$suffix"
+                            isSourceLabel(ep.name) -> "${v.n}$suffix ${idx + 1}"
+                            else -> "${v.n}$suffix ${ep.name}"
+                        }
                         variants.add(RAIVariant(label.trim(), v.u, archive.dubKey))
                     }
                 }
@@ -924,7 +920,7 @@ class RareAnimesProvider : MainAPI() {
             newEpisode(variantsJson(e.variants)) {
                 this.season = e.season
                 this.episode = e.epNum
-                this.name = e.name
+                if (e.name.isNotBlank()) this.name = e.name
             }
         }.toMutableList()
 
@@ -965,7 +961,6 @@ class RareAnimesProvider : MainAPI() {
         }
         archiveResults.forEach { orderKey(it.dubKey) }
         direct.episodes.forEach { ep -> ep.variants.forEach { orderKey(it.k) } }
-        direct.orphans.forEach { orderKey(it.k) }
         val splitDubs = dubOrder.size >= 2
 
         val epMap = LinkedHashMap<String, EpEntry>()
@@ -1002,9 +997,10 @@ class RareAnimesProvider : MainAPI() {
                 if (parsed != null) anyNumbered = true
                 val season = parsed?.first ?: defaultSeason
                 val epNum = parsed?.second ?: (idx + 1)
+                val epName = if (isSourceLabel(ep.name)) "" else ep.name
                 val idx0 = if (splitDubs) dubOrder.indexOf(archive.dubKey).let { if (it >= 0) it else 0 } else 0
                 ep.variants.forEach { v ->
-                    addVariant(idx0, season, epNum, ep.name, RAIVariant(vName, v.u, archive.dubKey))
+                    addVariant(idx0, season, epNum, epName, RAIVariant(vName, v.u, archive.dubKey))
                 }
             }
         }
@@ -1014,10 +1010,14 @@ class RareAnimesProvider : MainAPI() {
         return if (isMovie) {
             val variants = mutableListOf<RAIVariant>()
             for (archive in archiveResults) {
-                archive.episodes.forEach { ep ->
+                archive.episodes.forEachIndexed { idx, ep ->
                     ep.variants.forEach { v ->
                         if (variants.none { it.u == v.u }) {
-                            val label = if (archive.episodes.size > 1) "${v.n} ${ep.name}" else v.n
+                            val label = when {
+                                archive.episodes.size == 1 -> v.n
+                                isSourceLabel(ep.name) -> "${v.n} ${idx + 1}"
+                                else -> "${v.n} ${ep.name}"
+                            }
                             variants.add(RAIVariant(label, v.u, v.k))
                         }
                     }
@@ -1046,31 +1046,13 @@ class RareAnimesProvider : MainAPI() {
                 this.tags = genres
             }
         } else {
-            val zipVariants = direct.orphans.filter { v ->
-                epMap.values.none { entry -> entry.variants.any { it.u == v.u } }
-            }
-            if (zipVariants.isNotEmpty()) {
-                val keys = zipVariants.map { it.k }.filter { it.isNotBlank() }.distinct()
-                val groups = if (keys.isEmpty()) listOf("") else keys
-                for (g in groups) {
-                    val groupVariants = zipVariants.filter { it.k == g || (g.isEmpty() && it.k.isBlank()) }
-                    if (groupVariants.isEmpty()) continue
-                    val zipIdx = if (splitDubs) dubOrder.indexOf(g).let { if (it >= 0) it else 0 } else 0
-                    val maxEntry = epMap.values.filter { it.seasonIdx == zipIdx }.maxByOrNull { it.epNum }
-                    val zipReal = if (splitDubs) defaultSeason else (maxEntry?.realSeason ?: defaultSeason)
-                    val zipNum = (maxEntry?.epNum ?: 0) + 1
-                    val key = "$zipIdx:$zipReal:$zipNum:zip"
-                    epMap[key] = EpEntry(zipIdx, zipReal, zipNum, "ZIP Batch (Full Season)", groupVariants.toMutableList())
-                }
-            }
-
             val episodes = epMap.values.sortedWith(
                 compareBy({ it.seasonIdx }, { it.realSeason }, { it.epNum })
             ).map { e ->
                 newEpisode(variantsJson(e.variants)) {
                     this.season = if (splitDubs) e.seasonIdx + 1 else e.realSeason
                     this.episode = e.epNum
-                    this.name = e.name
+                    if (e.name.isNotBlank()) this.name = e.name
                 }
             }.toMutableList()
 
@@ -1082,8 +1064,11 @@ class RareAnimesProvider : MainAPI() {
                 this.plot = plot
                 this.tags = genres
                 if (splitDubs) {
-                    this.seasonNames = dubOrder.mapIndexed { idx, k ->
-                        com.lagradost.cloudstream3.SeasonData(idx + 1, dubLabel(k))
+                    val usedIdx = epMap.values.map { it.seasonIdx }.toSortedSet()
+                    this.seasonNames = usedIdx.mapNotNull { idx ->
+                        dubOrder.getOrNull(idx)?.let { k ->
+                            com.lagradost.cloudstream3.SeasonData(idx + 1, dubLabel(k))
+                        }
                     }
                 }
             }
