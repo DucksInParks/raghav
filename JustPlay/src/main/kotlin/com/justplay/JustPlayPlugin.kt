@@ -17,6 +17,8 @@ class JustPlayPlugin : Plugin() {
         registerExtractorAPI(PlayHubdrive())
         registerExtractorAPI(PlayHdStream4u())
         registerExtractorAPI(PlayGofile())
+        registerExtractorAPI(PlayGDFlix())
+        registerExtractorAPI(PlayGDLink())
         openSettings = { ctx ->
             val activity = ctx as? androidx.appcompat.app.AppCompatActivity
             if (activity != null) {

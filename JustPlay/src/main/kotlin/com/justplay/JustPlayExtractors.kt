@@ -1,5 +1,7 @@
 package com.justplay
 
+import com.fasterxml.jackson.annotation.JsonProperty
+import com.fasterxml.jackson.databind.ObjectMapper
 import com.lagradost.api.Log
 import com.lagradost.cloudstream3.SubtitleFile
 import com.lagradost.cloudstream3.app
@@ -13,9 +15,12 @@ import com.lagradost.cloudstream3.utils.ExtractorLinkType
 import com.lagradost.cloudstream3.utils.getAndUnpack
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import java.net.URLDecoder
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import org.json.JSONObject
 import org.jsoup.nodes.Document
-import java.net.URLDecoder
 
 internal object PlayPacker {
     fun findM3u8(unpacked: String): String? {
@@ -92,7 +97,6 @@ internal object PlayModiplay {
         val html = try {
             app.get(embedUrl, headers = PlayNet.headers("https://multimovies.casa/"), timeout = 20000L).text
         } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "modiplay: ${e.message}")
             return
         }
         val servers = Regex("""switchServer\('([^']+)','([^']+)','([^']+)','([^']+)','([^']*)'""")
@@ -117,7 +121,6 @@ internal object PlayModiplay {
                 try {
                     resolveProxyFile(base, platform, code, linkLabel, callback)
                 } catch (e: Exception) {
-                    Log.d(PlayNet.TAG, "proxy $name: ${e.message}")
                 }
             }
         }
@@ -134,7 +137,6 @@ internal object PlayModiplay {
         val page = try {
             app.get(proxyUrl, headers = PlayNet.headers(base), timeout = 20000L).text
         } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "proxy file: ${e.message}")
             return false
         }
         val src = Regex("""var\s+src\s*=\s*"([^"]+)"""").find(page)?.groupValues?.get(1)?.let { PlayNet.deEsc(it) }
@@ -176,7 +178,6 @@ internal object PlayModiplay {
                 }
             }
         } catch (e: Exception) {
-            Log.d(PlayNet.TAG, "subs: ${e.message}")
         }
     }
 }
@@ -220,7 +221,6 @@ internal object PlayGdmirror {
                     val apiRes = app.get(apiQuery, headers = PlayNet.headers(apiUrl), timeout = 20000L).text
                     collectSlugs(apiRes, sids)
                 } catch (e: Exception) {
-                    Log.d(PlayNet.TAG, "mapper api: ${e.message}")
                 }
             }
 
@@ -357,7 +357,6 @@ class PlayHubCloud : ExtractorApi() {
                     ).document
                     if (emitHubServers(innerDoc, base, inner, subtitleCallback, callback)) return true
                 } catch (e: Exception) {
-                    Log.d(PlayNet.TAG, "video page: ${e.message}")
                 }
             }
 
@@ -706,6 +705,474 @@ class PlayGofile : ExtractorApi() {
             }
         } catch (e: Exception) {
             Log.d(PlayNet.TAG, "gofile: ${e.message}")
+        }
+    }
+}
+
+// CryptoJS passphrase mode: OpenSSL EVP_BytesToKey with an 8 byte salt and
+// AES-256-CBC, base64url on the wire, nxsha talks to its api this way
+internal object PlayCrypto {
+
+    private fun evpBytesToKey(
+        password: ByteArray,
+        salt: ByteArray,
+        keyLen: Int = 32,
+        ivLen: Int = 16
+    ): Pair<ByteArray, ByteArray> {
+        val md = java.security.MessageDigest.getInstance("MD5")
+        val out = ArrayList<Byte>(keyLen + ivLen)
+        var prev = ByteArray(0)
+        while (out.size < keyLen + ivLen) {
+            md.reset()
+            md.update(prev)
+            md.update(password)
+            md.update(salt)
+            prev = md.digest()
+            out.addAll(prev.toList())
+        }
+        return out.subList(0, keyLen).toByteArray() to
+            out.subList(keyLen, keyLen + ivLen).toByteArray()
+    }
+
+    fun aesEncrypt(plain: String, passphrase: String): String? = try {
+        val salt = java.security.SecureRandom().generateSeed(8)
+        val (key, iv) = evpBytesToKey(passphrase.toByteArray(Charsets.UTF_8), salt)
+        val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(javax.crypto.Cipher.ENCRYPT_MODE, javax.crypto.spec.SecretKeySpec(key, "AES"), javax.crypto.spec.IvParameterSpec(iv))
+        val out = "Salted__".toByteArray(Charsets.UTF_8) + salt + cipher.doFinal(plain.toByteArray(Charsets.UTF_8))
+        java.util.Base64.getEncoder().encodeToString(out)
+            .replace("+", "-")
+            .replace("/", "_")
+            .replace("=", "")
+    } catch (e: Exception) {
+        null
+    }
+
+    fun aesDecrypt(data: String, passphrase: String): String? = try {
+        val b64 = data.trim()
+            .replace("-", "+")
+            .replace("_", "/")
+            .let { if (it.length % 4 != 0) it + "=".repeat(4 - it.length % 4) else it }
+        val raw = java.util.Base64.getDecoder().decode(b64)
+        if (raw.size < 17 || String(raw, 0, 8, Charsets.UTF_8) != "Salted__") return null
+        val salt = raw.copyOfRange(8, 16)
+        val (key, iv) = evpBytesToKey(passphrase.toByteArray(Charsets.UTF_8), salt)
+        val cipher = javax.crypto.Cipher.getInstance("AES/CBC/PKCS5Padding")
+        cipher.init(javax.crypto.Cipher.DECRYPT_MODE, javax.crypto.spec.SecretKeySpec(key, "AES"), javax.crypto.spec.IvParameterSpec(iv))
+        String(cipher.doFinal(raw.copyOfRange(16, raw.size)), Charsets.UTF_8)
+    } catch (e: Exception) {
+        null
+    }
+}
+
+open class PlayGDFlix : ExtractorApi() {
+    override val name = "GDFlix"
+    override val mainUrl = "https://*.gdflix.*"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val res = app.get(url, headers = PlayNet.headers(referer), timeout = 20000L)
+            val doc = res.document
+            val base = PlayNet.getBaseUrl(res.url)
+            val fileName = doc.select("ul > li.list-group-item:contains(Name)").text()
+                .substringAfter("Name :").trim()
+                .ifBlank { doc.title().substringAfter("GDFlix |").trim() }
+            val sizeText = doc.select("ul > li.list-group-item:contains(Size)").text()
+                .substringAfter("Size :").substringBefore("|").trim()
+            val quality = PlayNet.getIndexQuality(fileName)
+
+            suspend fun emit(link: String, server: String) {
+                if (!link.startsWith("http")) return
+                if (PlayLabels.isDeadName(server) || PlayLabels.isDeadName(link)) return
+                val extras = listOf(fileName, sizeText).filter { it.isNotBlank() }.joinToString(" ")
+                callback(
+                    newExtractorLink(
+                        "GDFlix",
+                        "GDFlix $server [$extras]",
+                        link,
+                        ExtractorLinkType.VIDEO
+                    ) {
+                        this.quality = quality
+                        this.referer = base
+                    }
+                )
+            }
+
+            for (a in doc.select("div.text-center a[href], div.mb-4 > a, a.btn")) {
+                val text = a.text()
+                val link = a.attr("href").trim()
+                if (link.isBlank() || link.startsWith("#")) continue
+                val abs = PlayNet.absolute(link, base)
+                when {
+                    text.contains("Instant DL", true) || text.contains("10GBPS", true) -> {}
+                    text.contains("Login To DL", true) || link.startsWith("/login") -> {}
+                    text.contains("DRIVEBOT", true) || link.contains("drivebot") -> {
+                        driveBot(abs, fileName, sizeText, quality, callback)
+                    }
+                    text.contains("FAST CLOUD", true) || text.contains("CLOUD DOWNLOAD", true) ||
+                        text.contains("ZIPDISK", true) -> {
+                        try {
+                            val cloudDoc = app.get(
+                                abs,
+                                headers = PlayNet.headers(res.url),
+                                timeout = 20000L
+                            ).document
+                            cloudDoc.selectFirst("div.card-body a")?.attr("href")?.trim()
+                                ?.takeIf { it.startsWith("http") }?.let { emit(it, "Cloud") }
+                        } catch (e: Exception) {
+                        }
+                    }
+                    text.contains("DIRECT DL", true) || text.contains("DIRECT SERVER", true) ->
+                        emit(abs, "Direct")
+                    text.contains("FSL", true) -> emit(abs, "FSL")
+                    link.contains("pixeldrain") -> {
+                        val pixelBase = PlayNet.getBaseUrl(link)
+                        val final = if (link.contains("download", true)) link
+                        else "$pixelBase/api/file/${link.substringAfterLast("/")}?download"
+                        emit(final, "Pixeldrain")
+                    }
+                    link.contains("gofile") ->
+                        PlayGofile().getUrl(abs, res.url, subtitleCallback, callback)
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(PlayNet.TAG, "gdflix: ${e.message}")
+        }
+    }
+
+    private suspend fun driveBot(
+        url: String,
+        fileName: String,
+        sizeText: String,
+        quality: Int,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val page = app.get(url, headers = PlayNet.headers(), timeout = 20000L)
+            val body = page.text
+            val token = Regex("""formData\.append\('token', '([a-f0-9]+)'""")
+                .find(body)?.groupValues?.get(1)
+            val downloadId = Regex("""fetch\('/download\?id=([a-zA-Z0-9/+]+)'""")
+                .find(body)?.groupValues?.get(1)
+            if (token == null || downloadId == null) return
+            val answer = app.post(
+                PlayNet.absolute("/download?id=$downloadId", PlayNet.getBaseUrl(page.url)),
+                headers = mapOf(
+                    "User-Agent" to PLAY_UA,
+                    "Referer" to page.url,
+                    "Content-Type" to "application/x-www-form-urlencoded"
+                ),
+                data = mapOf("token" to token),
+                timeout = 20000L
+            ).text
+            val link = Regex(""""url"\s*:\s*"(.*?)"""").find(answer)?.groupValues?.get(1)
+                ?.replace("\\", "")
+            if (!link.isNullOrBlank() && link.startsWith("http")) {
+                val extras = listOf(fileName, sizeText).filter { it.isNotBlank() }.joinToString(" ")
+                callback(
+                    newExtractorLink(
+                        "GDFlix",
+                        "GDFlix DriveBot [$extras]",
+                        link,
+                        ExtractorLinkType.VIDEO
+                    ) { this.quality = quality }
+                )
+            }
+        } catch (e: Exception) {
+            Log.d(PlayNet.TAG, "drivebot: ${e.message}")
+        }
+    }
+}
+
+// gdlink files are the same gdflix app behind another front door
+class PlayGDLink : PlayGDFlix() {
+    override val mainUrl = "https://gdlink.*"
+}
+
+internal object PlayNxsha {
+    private const val PASSPHRASE = "S8x!Jk4ZP1uG8\$my"
+    private const val BASE = "https://nxsha.space"
+    private const val TMDB_PROXY = "https://db.speedracelight.com/3"
+
+    private suspend fun apiGet(path: String, payload: Map<String, String>, referer: String): String? {
+        val obj = payload.toMutableMap()
+        obj["_req_ts"] = System.currentTimeMillis().toString()
+        obj["_req_salt"] = (1..10).map { ('a' + (0..35).random()) }.joinToString("")
+        val q = PlayCrypto.aesEncrypt(org.json.JSONObject(obj).toString(), PASSPHRASE) ?: return null
+        return try {
+            app.get(
+                "$BASE$path?q=${java.net.URLEncoder.encode(q, "UTF-8")}",
+                headers = PlayNet.headers(referer),
+                timeout = 20000L
+            ).text
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun <T> decodeHash(body: String?, clazz: Class<T>): T? {
+        if (body.isNullOrBlank()) return null
+        val hash = Regex(""""_hash"\s*:\s*"([^"]+)"""").find(body)?.groupValues?.get(1) ?: return null
+        val plain = PlayCrypto.aesDecrypt(hash, PASSPHRASE) ?: return null
+        return try {
+            ObjectMapper().readValue(plain, clazz)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private class NxServers(@JsonProperty("servers") val servers: List<NxServer>? = null)
+    private class NxServer(
+        @JsonProperty("name") val name: String? = null,
+        @JsonProperty("scraper") val scraper: String? = null,
+        @JsonProperty("webSupport") val webSupport: Boolean? = null
+    )
+
+    private class NxSources(@JsonProperty("sources") val sources: List<NxSource>? = null)
+    private class NxSource(
+        @JsonProperty("url") val url: String? = null,
+        @JsonProperty("quality") val quality: String? = null,
+        @JsonProperty("label") val label: String? = null,
+        @JsonProperty("isEmbed") val isEmbed: Boolean? = null,
+        @JsonProperty("type") val type: String? = null
+    )
+
+    private class NxSubs(@JsonProperty("subtitles") val subtitles: List<NxSub>? = null)
+    private class NxSub(
+        @JsonProperty("title") val title: String? = null,
+        @JsonProperty("language") val language: String? = null,
+        @JsonProperty("uri") val uri: String? = null
+    )
+
+    private suspend fun imdbToTmdb(imdbId: String): String? {
+        val body = try {
+            app.get("$TMDB_PROXY/find/$imdbId?external_source=imdb_id", timeout = 15000L).text
+        } catch (e: Exception) {
+            return null
+        }
+        return Regex(""""movie_results"\s*:\s*\[\s*\{[^}]*?"id"\s*:\s*(\d+)""")
+            .find(body)?.groupValues?.get(1)
+    }
+
+    suspend fun resolve(
+        embedUrl: String,
+        label: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            val tvMatch = Regex("/embed/tv/(\\d+)/(\\d+)/(\\d+)").find(embedUrl)
+            val movieMatch = Regex("/embed/movie/(tt\\d+)").find(embedUrl)
+            var tmdbId: String? = null
+            var imdbId = ""
+            var type = "movie"
+            var season = ""
+            var episode = ""
+            if (tvMatch != null) {
+                tmdbId = tvMatch.groupValues[1]
+                season = tvMatch.groupValues[2]
+                episode = tvMatch.groupValues[3]
+                type = "tv"
+            } else if (movieMatch != null) {
+                imdbId = movieMatch.groupValues[1]
+                tmdbId = imdbToTmdb(imdbId)
+                    ?: Regex("/embed/movie/(\\d+)").find(embedUrl)?.groupValues?.get(1)
+            } else {
+                return false
+            }
+            val tmdb = tmdbId ?: return false
+
+            val base = mapOf(
+                "tmdbId" to tmdb, "imdb_id" to imdbId, "type" to type,
+                "season" to season, "episode" to episode
+            )
+            val serversBody = apiGet("/api/servers", base, embedUrl) ?: return false
+            val servers = decodeHash(serversBody, NxServers::class.java)?.servers ?: return false
+
+            var any = false
+            coroutineScope {
+                servers.map { server ->
+                    async(Dispatchers.IO) {
+                        if (server.webSupport == false) return@async
+                        val scraper = server.scraper ?: return@async
+                        val sourcesBody = try {
+                            apiGet(
+                                "/api/sources",
+                                base + mapOf("ex_lang" to "false", "provider" to scraper),
+                                embedUrl
+                            )
+                        } catch (e: Exception) {
+                            null
+                        } ?: return@async
+                        val sources = decodeHash(sourcesBody, NxSources::class.java)?.sources ?: return@async
+                        for (src in sources) {
+                            val url = src.url?.trim()?.takeIf { it.startsWith("http") } ?: continue
+                            if (src.isEmbed == true) continue
+                            val name = PlayLabels.buildLabel("multimovies", "", "$label ${server.name ?: ""}")
+                            val linkType = when (src.type?.lowercase()) {
+                                "m3u8", "hls" -> ExtractorLinkType.M3U8
+                                "mpd", "dash" -> ExtractorLinkType.DASH
+                                "mp4", "video" -> ExtractorLinkType.VIDEO
+                                else -> ExtractorLinkType.M3U8
+                            }
+                            val qualityNum = Regex("(2160|1080|720|480|360)")
+                                .find(src.label ?: src.quality ?: "")?.groupValues?.get(1)?.toIntOrNull()
+                            callback(
+                                newExtractorLink("JustPlay", name, url, linkType) {
+                                    // nitro 403s without the nxsha referer
+                                    this.headers = mapOf("Referer" to "$BASE/")
+                                    qualityNum?.let { this.quality = it }
+                                }
+                            )
+                            any = true
+                        }
+                    }
+                }.forEach { it.join() }
+            }
+
+            try {
+                val subsBody = apiGet("/api/subtitles", base, embedUrl)
+                decodeHash(subsBody, NxSubs::class.java)?.subtitles?.forEach { sub ->
+                    val uri = sub.uri?.trim()?.takeIf { it.startsWith("http") } ?: return@forEach
+                    val name = sub.title?.takeIf { it.isNotBlank() }
+                        ?: sub.language?.takeIf { it.isNotBlank() } ?: "English"
+                    subtitleCallback(newSubtitleFile(name, uri) {})
+                }
+            } catch (e: Exception) {
+                Log.d(PlayNet.TAG, "nxsha subs: ${e.message}")
+            }
+            any
+        } catch (e: Exception) {
+            Log.d(PlayNet.TAG, "nxsha: ${e.message}")
+            false
+        }
+    }
+}
+
+internal object PlayVidout {
+    private const val REFERER = "https://vidout.pages.dev/"
+    private const val GITHUB_RAW = "https://raw.githubusercontent.com/Watchout2025/api/refs/heads/main"
+
+    private val langNames = mapOf(
+        "eng" to "English", "hin" to "Hindi", "spa" to "Spanish", "fre" to "French",
+        "ger" to "German", "ita" to "Italian", "por" to "Portuguese", "rus" to "Russian",
+        "zho" to "Chinese", "ara" to "Arabic", "kor" to "Korean", "jpn" to "Japanese",
+        "tam" to "Tamil", "tel" to "Telugu", "kan" to "Kannada", "mal" to "Malayalam"
+    )
+
+    private suspend fun getText(url: String): String? = try {
+        val res = app.get(url, headers = PlayNet.headers(), timeout = 15000L)
+        if (res.isSuccessful) res.text else null
+    } catch (e: Exception) {
+        null
+    }
+
+    suspend fun resolve(
+        embedUrl: String,
+        label: String,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        return try {
+            val tvMatch = Regex("/tv/(\\d+)/(?:s(\\d+)|(\\d+))/(?:e(\\d+)|(\\d+))", RegexOption.IGNORE_CASE)
+                .find(embedUrl)
+            val movieMatch = Regex("/movie/(tt\\d+|\\d+)", RegexOption.IGNORE_CASE).find(embedUrl)
+
+            var streamUrl: String? = null
+            var tmdbId: String? = null
+            var season: Int? = null
+            var episode: Int? = null
+            if (tvMatch != null) {
+                tmdbId = tvMatch.groupValues[1]
+                season = (tvMatch.groupValues[2].ifEmpty { tvMatch.groupValues[3] }).toIntOrNull()
+                episode = (tvMatch.groupValues[4].ifEmpty { tvMatch.groupValues[5] }).toIntOrNull()
+                if (tmdbId == null || season == null || episode == null) return false
+                val body = getText("$GITHUB_RAW/hls/tv/$tmdbId/S$season.json") ?: return false
+                streamUrl = Regex("\"$episode\"\\s*:\\s*\"([^\"]+)\"").find(body)?.groupValues?.get(1)
+            } else if (movieMatch != null) {
+                val id = movieMatch.groupValues[1]
+                tmdbId = if (id.startsWith("tt")) {
+                    val body = try {
+                        app.get(
+                            "https://db.speedracelight.com/3/find/$id?external_source=imdb_id",
+                            timeout = 15000L
+                        ).text
+                    } catch (e: Exception) {
+                        return false
+                    }
+                    Regex("\"movie_results\"\\s*:\\s*\\[\\s*\\{[^}]*?\"id\"\\s*:\\s*(\\d+)")
+                        .find(body)?.groupValues?.get(1)
+                } else id
+                streamUrl = tmdbId?.let { getText("$GITHUB_RAW/hls/movie/$it")?.trim()?.takeIf { s -> s.startsWith("http") } }
+            } else {
+                return false
+            }
+
+            var url = streamUrl ?: return false
+            url = PlayNet.deEsc(url)
+            val lower = url.lowercase()
+            // '#' entries point at embed pages and plain .txt files are not
+            // playable over http
+            if (url.contains("#")) return false
+            if (lower.endsWith(".txt") && !lower.contains("/hls3/")) return false
+            if (!lower.contains(".m3u8") && !lower.endsWith(".txt") && !lower.contains("/stream/")) {
+                return false
+            }
+
+            val name = PlayLabels.buildLabel("multimovies", "", label)
+            callback(
+                newExtractorLink("JustPlay", name, url, ExtractorLinkType.M3U8) {
+                    this.headers = mapOf("Referer" to REFERER)
+                }
+            )
+            loadCdnSubtitles(url, subtitleCallback)
+            loadGithubSubtitles(tmdbId, season, episode, subtitleCallback)
+            true
+        } catch (e: Exception) {
+            Log.d(PlayNet.TAG, "vidout: ${e.message}")
+            false
+        }
+    }
+
+    private suspend fun loadCdnSubtitles(streamUrl: String, subtitleCallback: (SubtitleFile) -> Unit) {
+        try {
+            val m = Regex("/([^/]+)/hls3/([^/]+)/([^/]+)/([^/]+)_(?:,|[nhl]/)").find(streamUrl) ?: return
+            val (srv, prefix, folderId, filePrefix) = m.destructured
+            for ((code, name) in langNames) {
+                val cdn = "https://$srv.acek-cdn.com/vtt/$prefix/$folderId/${filePrefix}_$code.vtt"
+                subtitleCallback(newSubtitleFile(name, cdn) {
+                    this.headers = mapOf("Referer" to REFERER)
+                })
+            }
+        } catch (e: Exception) {
+        }
+    }
+
+    private suspend fun loadGithubSubtitles(
+        tmdbId: String?,
+        season: Int?,
+        episode: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit
+    ) {
+        if (tmdbId == null) return
+        try {
+            val path = if (season != null && episode != null) {
+                "sub/tv/$tmdbId/$season/$episode/subtitles.json"
+            } else {
+                "sub/movie/$tmdbId/subtitles.json"
+            }
+            val body = getText("$GITHUB_RAW/$path") ?: return
+            for (m in Regex(""""([a-z]{2})"\s*:\s*"(https?[^"]+)"""").findAll(body)) {
+                subtitleCallback(newSubtitleFile(m.groupValues[1].uppercase(), PlayNet.deEsc(m.groupValues[2])) {})
+            }
+        } catch (e: Exception) {
+            Log.d(PlayNet.TAG, "vidout subs: ${e.message}")
         }
     }
 }

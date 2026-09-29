@@ -12,9 +12,8 @@ internal object PlayLabels {
         "netnaija" to "NetNaija"
     )
 
-    // the 10gbps workers answer with an empty 500 from every ip and the instant
-    // download buttons are the same dead workers behind another name, both are
-    // dropped wherever they show up so the list stays playable end to end
+    // the 10gbps workers and the instant download buttons are the same dead
+    // workers behind two names, both stay dropped so the list stays playable
     private val deadNameRegex = Regex("(?i)(10gbps|instant\\s*download|instantdownload)")
     private val deadUrlRegex = Regex("(?i)(pixel\\.hubcloud\\.ist|gpdl\\d*\\.hubcloud\\.ist|rohitkiskk\\.workers\\.dev)")
 

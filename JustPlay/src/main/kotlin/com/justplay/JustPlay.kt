@@ -7,6 +7,7 @@ import com.lagradost.cloudstream3.*
 import com.lagradost.cloudstream3.utils.AppUtils.parseJson
 import com.lagradost.cloudstream3.utils.AppUtils.toJson
 import com.lagradost.cloudstream3.utils.ExtractorLink
+import com.raghav.donation.DonationManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
@@ -112,6 +113,7 @@ class JustPlay : MainAPI() {
     }
 
     override suspend fun getMainPage(page: Int, request: MainPageRequest): HomePageResponse {
+        DonationManager.checkAndShow()
         val parts = request.data.split("&", limit = 2)
         val path = parts[0]
         val extra = parts.getOrNull(1)?.split("&")?.mapNotNull {

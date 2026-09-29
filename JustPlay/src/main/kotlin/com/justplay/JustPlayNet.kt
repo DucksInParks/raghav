@@ -9,6 +9,7 @@ import com.lagradost.cloudstream3.utils.ExtractorLink
 import com.lagradost.cloudstream3.utils.Qualities
 import com.lagradost.cloudstream3.utils.loadExtractor
 import com.lagradost.cloudstream3.utils.newExtractorLink
+import com.lagradost.nicehttp.NiceResponse
 import org.json.JSONObject
 import java.net.URI
 
@@ -80,9 +81,8 @@ internal object PlayNet {
         return seasons.ifEmpty { null }
     }
 
-    // short names like It would match half the catalog so they need a full match,
-    // and short phrases like The Boys would otherwise also match To All the Boys,
-    // so those need the post to start with them once the site prefix is gone
+    // short names match half the catalog without a full compare, and short
+    // phrases like The Boys also match To All the Boys, so posts must start with them
     fun titleMatches(postTitle: String?, query: String): Boolean {
         if (postTitle.isNullOrBlank()) return false
         val normQuery = normalizeTitle(query)
@@ -119,6 +119,29 @@ internal object PlayNet {
         href.startsWith("//") -> "https:$href"
         href.startsWith("/") -> base.trimEnd('/') + href
         else -> base.trimEnd('/') + "/" + href
+    }
+
+    fun hostOf(url: String): String = try {
+        URI(url).host?.lowercase() ?: ""
+    } catch (e: Exception) {
+        ""
+    }
+
+    // okhttp gives up after 20 redirects and some drive pages bounce between
+    // ad mirrors forever, walking the location headers by hand survives that
+    suspend fun followManually(url: String, referer: String?): NiceResponse? {
+        var current = url
+        repeat(8) {
+            val res = try {
+                app.get(current, headers = headers(referer), allowRedirects = false, timeout = 15000L)
+            } catch (e: Exception) {
+                return null
+            }
+            val loc = res.headers["location"]?.trim().orEmpty()
+            if (loc.isEmpty()) return res
+            current = absolute(loc, current)
+        }
+        return null
     }
 
     // greenmotors and the wp shorteners answer with a redirect first, the payload
@@ -173,6 +196,32 @@ internal object PlayNet {
         }
     }
 
+    private suspend fun buildSiteLink(
+        site: String,
+        label: String,
+        quality: Int?,
+        link: ExtractorLink
+    ): ExtractorLink? {
+        if (PlayLabels.isDeadName(link.name) || PlayLabels.isDeadUrl(link.url)) return null
+        // the hubcloud family names its links "Server [file | size]", the
+        // part before the bracket is the server, the rest is info
+        val server = link.name.substringBefore(" [").trim()
+        val extras = link.name.substringAfter(" [", "").removeSuffix("]").trim()
+        val info = listOf(extras, label).filter { it.isNotBlank() }.joinToString(" ")
+        val name = PlayLabels.buildLabel(site, server, info)
+        return newExtractorLink(
+            "[${PlayLabels.siteName(site)}]",
+            name,
+            link.url,
+            link.type
+        ) {
+            this.quality = quality ?: link.quality
+            this.referer = link.referer
+            this.headers = link.headers
+            this.extractorData = link.extractorData
+        }
+    }
+
     suspend fun emitSiteLink(
         site: String,
         url: String,
@@ -184,33 +233,54 @@ internal object PlayNet {
     ) {
         if (url.isBlank()) return
         if (PlayLabels.isDeadUrl(url) || PlayLabels.isDeadName(label)) return
-        val prefix = "[${PlayLabels.siteName(site)}]"
         try {
             val collected = mutableListOf<ExtractorLink>()
             loadExtractor(url, referer, subtitleCallback) { link ->
                 collected.add(link)
             }
             for (link in collected) {
-                if (PlayLabels.isDeadName(link.name) || PlayLabels.isDeadUrl(link.url)) continue
-                // the hubcloud family names its links "Server [file | size]", the
-                // part before the bracket is the server, the rest is info
-                val server = link.name.substringBefore(" [").trim()
-                val extras = link.name.substringAfter(" [", "").removeSuffix("]").trim()
-                val info = listOf(extras, label).filter { it.isNotBlank() }.joinToString(" ")
-                val name = PlayLabels.buildLabel(site, server, info)
-                callback(
-                    newExtractorLink(
-                        prefix,
-                        name,
-                        link.url,
-                        link.type
-                    ) {
-                        this.quality = quality ?: link.quality
-                        this.referer = link.referer
-                        this.headers = link.headers
-                        this.extractorData = link.extractorData
-                    }
-                )
+                buildSiteLink(site, label, quality, link)?.let(callback)
+            }
+        } catch (e: Exception) {
+            Log.d(TAG, "$site emit: ${e.message}")
+        }
+    }
+
+    // routes through justplay's own extractors because loadExtractor picks
+    // whichever extension registered last for a host
+    suspend fun emitOwnLink(
+        site: String,
+        url: String,
+        label: String,
+        quality: Int? = null,
+        referer: String? = null,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        if (url.isBlank() || PlayLabels.isDeadUrl(url)) return
+        val host = hostOf(url)
+        if (host.isEmpty()) return
+        val resolver: (suspend (String?, (SubtitleFile) -> Unit, (ExtractorLink) -> Unit) -> Unit) = when {
+            host.endsWith("hubcloud.ist") || host.endsWith("hubcloud.foo") ->
+                { r, s, c -> PlayHubCloud().getUrl(url, r, s, c) }
+            host.contains("gdflix") || host.contains("gdlink") ->
+                { r, s, c -> PlayGDFlix().getUrl(url, r, s, c) }
+            host.contains("hubdrive") -> { r, s, c -> PlayHubdrive().getUrl(url, r, s, c) }
+            host.contains("hubcdn") -> { r, s, c -> PlayHubCdn().getUrl(url, r, s, c) }
+            host.contains("hblinks") -> { r, s, c -> PlayHblinks().getUrl(url, r, s, c) }
+            host.contains("gofile") -> { r, s, c -> PlayGofile().getUrl(url, r, s, c) }
+            host.contains("fastdl") -> { r, s, c -> PlayFastDl().getUrl(url, r, s, c) }
+            host.contains("vcloud") -> { r, s, c -> PlayVCloud().getUrl(url, r, s, c) }
+            else -> {
+                emitSiteLink(site, url, label, quality, referer, subtitleCallback, callback)
+                return
+            }
+        }
+        try {
+            val collected = mutableListOf<ExtractorLink>()
+            resolver(referer, subtitleCallback) { collected.add(it) }
+            for (link in collected) {
+                buildSiteLink(site, label, quality, link)?.let(callback)
             }
         } catch (e: Exception) {
             Log.d(TAG, "$site emit: ${e.message}")

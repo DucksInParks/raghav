@@ -406,7 +406,6 @@ internal object NetNaijaSite {
                                         }
                                     }
                                 } catch (e: Exception) {
-                                    Log.d(PlayNet.TAG, "captions: ${e.message}")
                                 }
                             }
                         } catch (e: Exception) {

@@ -13,13 +13,14 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
+import org.json.JSONObject
 import java.net.URI
 
 internal object DrivePages {
     // hosts that never carry a playable file: cloudflare walled mirrors, site
     // plumbing and ad jumps, everything else found on the drive pages is fair game
     private val junk = Regex(
-        "gdflix|gdtot|filebee|filepress|gmpg\\.org|googleapis|googletagmanager|fonts\\.|schema\\.org|w3\\.org|" +
+        "gdtot|filebee|filepress|gmpg\\.org|googleapis|googletagmanager|fonts\\.|schema\\.org|w3\\.org|" +
             "twitter\\.com|facebook\\.com|pinterest|whatsapp|telegram|t\\.me/|/tg/|catimages|tinyurl|bonuscaf|" +
             "winexch|a-ads|pixabay|i-poster|scene-source|vglist|vegamovies-apk|hdhub4u\\.download|hdhub4u\\.tv"
     )
@@ -75,7 +76,11 @@ internal object DrivePages {
         try {
             // mobilejsr rest loops redirects for some visitors, nexdrive serves the same app
             val fetchUrl = driveUrl.replace("mobilejsr.rest", "nexdrive.fit")
-            val res = app.get(fetchUrl, headers = PlayNet.headers(referer), timeout = 20000L)
+            val res = try {
+                app.get(fetchUrl, headers = PlayNet.headers(referer), timeout = 20000L)
+            } catch (e: Exception) {
+                PlayNet.followManually(fetchUrl, referer) ?: throw e
+            }
             val doc = res.document
             val driveHost = try {
                 URI(res.url).host?.lowercase()
@@ -104,7 +109,7 @@ internal object DrivePages {
                                 val quality = listOf(headLabel, label).firstNotNullOfOrNull {
                                     PlayNet.getIndexQuality(it).takeIf { q -> q != Qualities.Unknown.value }
                                 }
-                                PlayNet.emitSiteLink(site, href, "Episode $episode", quality, fetchUrl, subtitleCallback, callback)
+                                PlayNet.emitOwnLink(site, href, "Episode $episode", quality, fetchUrl, subtitleCallback, callback)
                             }
                         }
                     }
@@ -119,7 +124,7 @@ internal object DrivePages {
                 if (row != null) {
                     val href = row.attr("href").trim()
                     if (!isSelfLink(href, hosts)) {
-                        PlayNet.emitSiteLink(site, href, "Episode $episode", null, fetchUrl, subtitleCallback, callback)
+                        PlayNet.emitOwnLink(site, href, "Episode $episode", null, fetchUrl, subtitleCallback, callback)
                         return
                     }
                 }
@@ -143,7 +148,7 @@ internal object DrivePages {
             coroutineScope {
                 external.forEach { href ->
                     async(Dispatchers.IO) {
-                        PlayNet.emitSiteLink(site, href, info, quality, fetchUrl, subtitleCallback, callback)
+                        PlayNet.emitOwnLink(site, href, info, quality, fetchUrl, subtitleCallback, callback)
                     }
                 }
             }
@@ -533,20 +538,183 @@ internal object FourKhdHubSite {
 }
 
 internal object Movies4uSite {
-    private const val DEFAULT_DOMAIN = "https://movies4u.cr"
+    private const val DEFAULT_DOMAIN = "https://new1.movies4u.garden"
+    private const val DOMAIN_REGISTRY =
+        "https://raw.githubusercontent.com/phisher98/TVVVV/refs/heads/main/domains.json"
     private val driveHostRegex = Regex("mdrive\\.cloud|nexdrive\\.fit|mobilejsr\\.rest|mdisk")
 
-    private suspend fun emitDrivePage(
-        driveUrl: String,
+    @Volatile
+    private var registryDomain: String? = null
+
+    @Volatile
+    private var registryCheckedAt = 0L
+
+    private val junk = Regex(
+        "winexch|a-ads|tinyurl|t\\.me/|/tg/|telegram|googleapis|googletagmanager|schema\\.org|w3\\.org"
+    )
+
+    private suspend fun registryDomain(): String? {
+        val now = System.currentTimeMillis()
+        if (registryDomain == null && now - registryCheckedAt > 10 * 60 * 1000L) {
+            registryCheckedAt = now
+            registryDomain = try {
+                val text = app.get(DOMAIN_REGISTRY, timeout = 10000L).text
+                JSONObject(text).optString("movies4u").takeIf { it.startsWith("http") }
+            } catch (e: Exception) {
+                null
+            }
+        }
+        return registryDomain
+    }
+
+    private suspend fun candidates(): List<String> {
+        val list = mutableListOf<String>()
+        FirebaseDomainHelper.getDomain("justplay_movies4u")?.let { list.add(it) }
+        FirebaseDomainHelper.getDomain("movies4u")?.let { list.add(it) }
+        registryDomain()?.let { list.add(it) }
+        list.add(DEFAULT_DOMAIN)
+        return list.distinct()
+    }
+
+    private suspend fun searchPosts(domain: String, query: String): List<Pair<String, String>>? {
+        return try {
+            val text = app.get(
+                "$domain/lookup.php?q=${Uri.encode(query)}&page=1&per_page=30",
+                headers = PlayNet.headers(),
+                timeout = 15000L
+            ).text
+            val hits = JSONObject(text).optJSONArray("hits") ?: return emptyList()
+            (0 until hits.length()).mapNotNull { i ->
+                val hit = hits.optJSONObject(i) ?: return@mapNotNull null
+                val postTitle = hit.optString("post_title")
+                val permalink = hit.optString("permalink")
+                if (postTitle.isBlank() || permalink.isBlank()) null
+                else postTitle to PlayNet.absolute(permalink, domain)
+            }
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private suspend fun findPosts(title: String): List<Pair<String, String>> {
+        for (domain in candidates()) {
+            val posts = searchPosts(domain, title) ?: continue
+            return posts.map { (postTitle, url) ->
+                postTitle to url.replaceFirst(Regex("^[^/]*//[^/]+"), domain)
+            }
+        }
+        return emptyList()
+    }
+
+    private suspend fun getDoc(url: String): Document? = try {
+        app.get(url, headers = PlayNet.headers(PlayNet.getBaseUrl(url)), timeout = 20000L).document
+    } catch (e: Exception) {
+        null
+    }
+
+    // a post page only hands out m4ulinks buttons, the real hubcloud and
+    // gdflix links sit behind those under h4 quality headings
+    private fun qualityBlocks(doc: Document): List<Pair<String, String>> {
+        val out = mutableListOf<Pair<String, String>>()
+        for (block in doc.select("div.downloads-btns-div")) {
+            var label = ""
+            var sib = block.previousElementSibling()
+            while (sib != null) {
+                val text = sib.tagName().let { if (it == "h2" || it == "h3" || it == "h4") sib.text() else "" }
+                if (text.isNotBlank()) {
+                    label = text.replace(Regex("\\s+"), " ").trim()
+                    break
+                }
+                sib = sib.previousElementSibling()
+            }
+            for (a in block.select("a[href]")) {
+                val href = a.attr("href").trim()
+                val text = a.text()
+                if (!href.startsWith("http")) continue
+                if (text.contains("Batch", true) || text.contains("Zip", true)) continue
+                if (junk.containsMatchIn(href)) continue
+                out.add(href to label)
+            }
+        }
+        return out.distinctBy { it.first }
+    }
+
+    private suspend fun emitM4uLinks(
+        linksUrl: String,
+        label: String,
         episode: Int?,
         season: Int?,
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        DrivePages.emit(
-            "movies4u", driveUrl, episode, season, "", null, null,
-            subtitleCallback, callback
-        )
+        val doc = getDoc(linksUrl) ?: return
+        val quality = if (label.isBlank()) null else PlayNet.getIndexQuality(label)
+
+        val rows = mutableListOf<Pair<String, String>>()
+        if (episode != null) {
+            val epRegex = Regex("(?i)Episodes?\\s*:\\s*0*$episode(?!\\d)")
+            for (h5 in doc.select("h5")) {
+                if (!epRegex.containsMatchIn(h5.text())) continue
+                var sib = h5.nextElementSibling()
+                while (sib != null && sib.tagName() != "h5") {
+                    for (a in sib.select("a[href]")) {
+                        val href = a.attr("href").trim()
+                        if (href.startsWith("http") && !junk.containsMatchIn(href)) {
+                            rows.add(href to label)
+                        }
+                    }
+                    sib = sib.nextElementSibling()
+                }
+            }
+        }
+        if (rows.isEmpty()) {
+            // the links page carries the real quality headings, one block per
+            // file, so the label comes from the page instead of the caller
+            for ((href, headLabel) in qualityBlocks(doc)) {
+                rows.add(href to headLabel.ifBlank { label })
+            }
+        }
+        if (rows.isEmpty()) {
+            for (block in doc.select("div.downloads-btns-div")) {
+                for (a in block.select("a[href]")) {
+                    val href = a.attr("href").trim()
+                    val text = a.text()
+                    if (!href.startsWith("http")) continue
+                    if (text.contains("Batch", true) || text.contains("Zip", true)) continue
+                    if (junk.containsMatchIn(href)) continue
+                    rows.add(href to label)
+                }
+            }
+        }
+
+        coroutineScope {
+            rows.distinctBy { it.first }.forEach { (href, rowLabel) ->
+                async(Dispatchers.IO) {
+                    val rowQuality = if (rowLabel.isBlank()) quality else PlayNet.getIndexQuality(rowLabel)
+                    emitSource(href, rowLabel, rowQuality, linksUrl, season, subtitleCallback, callback)
+                }
+            }
+        }
+    }
+
+    private suspend fun emitSource(
+        url: String,
+        label: String,
+        quality: Int?,
+        referer: String?,
+        season: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val host = PlayNet.hostOf(url)
+        when {
+            host.contains("m4ulinks") ->
+                emitM4uLinks(url, label, null, season, subtitleCallback, callback)
+            driveHostRegex.containsMatchIn(url) ->
+                DrivePages.emit("movies4u", url, null, season, label, null, referer, subtitleCallback, callback)
+            else ->
+                PlayNet.emitOwnLink("movies4u", url, label, quality, referer, subtitleCallback, callback)
+        }
     }
 
     suspend fun invoke(
@@ -555,90 +723,44 @@ internal object Movies4uSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val domain = FirebaseDomainHelper.getDomain("justplay_movies4u")
-                ?: FirebaseDomainHelper.getDomain("movies4u")
-                ?: DEFAULT_DOMAIN
             val title = res.title ?: return
+            val posts = findPosts(title)
+            if (posts.isEmpty()) return
 
-            val searchDoc = app.get(
-                "$domain/?s=${Uri.encode(title)}",
-                headers = PlayNet.headers(),
-                timeout = 20000L
-            ).document
-            val anchors = searchDoc.select("article h2 a, article h3 a, h2.entry-title a, h3.entry-title a")
-                .mapNotNull { el ->
-                    val t = el.text().trim()
-                    val href = el.attr("href").trim()
-                    if (t.isNotBlank() && href.startsWith("http")) t to href else null
-                }
-                .filter { (t, _) -> PlayNet.titleMatches(t, title) }
-
-            val filtered = if (res.season != null) {
-                val seasonPosts = anchors.filter { (t, _) ->
-                    PlayNet.seasonsOf(t)?.contains(res.season) == true
+            val matched = posts.filter { (postTitle, _) -> PlayNet.titleMatches(postTitle, title) }
+            val chosen = if (res.season != null) {
+                val seasonPosts = matched.filter { (postTitle, _) ->
+                    PlayNet.seasonsOf(postTitle)?.contains(res.season) == true
                 }
                 if (seasonPosts.isNotEmpty()) seasonPosts
-                else anchors.filter { (t, _) -> PlayNet.seasonsOf(t) == null }
+                else matched.filter { (postTitle, _) -> PlayNet.seasonsOf(postTitle) == null }
             } else {
-                anchors.filter { (t, _) -> PlayNet.yearMatches(t, res.matchYear) }.ifEmpty { anchors }
-            }
-            val chosen = filtered.take(2)
+                matched.filter { (postTitle, _) -> PlayNet.yearMatches(postTitle, res.matchYear) }
+                    .ifEmpty { matched }
+            }.take(2)
             if (chosen.isEmpty()) return
 
             chosen.forEach { (_, postUrl) ->
                 try {
-                    val doc = app.get(postUrl, headers = PlayNet.headers(domain), timeout = 20000L).document
+                    val doc = getDoc(postUrl) ?: return@forEach
                     if (res.season == null) {
-                        val drives = doc.select("a[href]").mapNotNull { el ->
-                            val text = el.text()
-                            val href = el.attr("href").trim()
-                            if (!href.startsWith("http")) null
-                            else if (text.contains("Batch", true) || text.contains("Zip", true)) null
-                            else if (driveHostRegex.containsMatchIn(href)) href
-                            else null
-                        }.distinct()
-                        if (drives.isEmpty()) {
-                            doc.select("a:has(button)").mapNotNull { el ->
-                                val href = el.attr("href").trim()
-                                if (href.startsWith("http") && driveHostRegex.containsMatchIn(href)) href else null
-                            }.distinct().forEach { driveUrl ->
-                                emitDrivePage(driveUrl, null, null, subtitleCallback, callback)
-                            }
-                        } else {
-                            coroutineScope {
-                                drives.forEach { driveUrl ->
-                                    async(Dispatchers.IO) {
-                                        emitDrivePage(driveUrl, null, null, subtitleCallback, callback)
-                                    }
+                        val blocks = qualityBlocks(doc)
+                        coroutineScope {
+                            blocks.forEach { (href, label) ->
+                                async(Dispatchers.IO) {
+                                    emitSource(href, label, PlayNet.getIndexQuality(label), postUrl, null, subtitleCallback, callback)
                                 }
                             }
                         }
                     } else {
                         val seasonRegex = Regex("(?i)Season\\s*${res.season}(?!\\d)")
-                        val heads = doc.select("h2, h3, h4").filter { el ->
-                            val text = el.text().replace('\u00A0', ' ')
-                            seasonRegex.containsMatchIn(text) && text.contains("Episode", true)
+                        val blocks = qualityBlocks(doc).filter { (_, label) ->
+                            seasonRegex.containsMatchIn(label)
+                        }.ifEmpty {
+                            qualityBlocks(doc).filter { (_, label) -> PlayNet.seasonsOf(label) == null }
                         }
-                        val targets = mutableListOf<String>()
-                        for (head in heads) {
-                            var sib = head.nextElementSibling()
-                            while (sib != null && sib.tagName() !in listOf("h2", "h3", "h4")) {
-                                for (a in sib.select("a[href]")) {
-                                    val text = a.text()
-                                    val href = a.attr("href").trim()
-                                    if (!href.startsWith("http")) continue
-                                    if (text.contains("Batch", true) || text.contains("Zip", true)) continue
-                                    if (text.contains("G-Direct", true) || text.contains("V-Cloud", true) ||
-                                        text.contains("Download", true)
-                                    ) {
-                                        targets.add(href)
-                                    }
-                                }
-                                sib = sib.nextElementSibling()
-                            }
-                        }
-                        targets.distinct().forEach { driveUrl ->
-                            emitDrivePage(driveUrl, res.episode, res.season, subtitleCallback, callback)
+                        blocks.forEach { (href, label) ->
+                            emitM4uLinks(href, label, res.episode, res.season, subtitleCallback, callback)
                         }
                     }
                 } catch (e: Exception) {
@@ -650,6 +772,7 @@ internal object Movies4uSite {
         }
     }
 }
+
 
 internal object TmfSite {
     private const val DEFAULT_DOMAIN = "https://themoviesflixhq.com"
@@ -803,6 +926,8 @@ internal object MultimoviesSite {
             host.contains("modiplay") -> PlayModiplay.resolve(embedUrl, label, subtitleCallback, callback)
             host.contains("iqsmartgames") || host.contains("filesforever") ->
                 PlayGdmirror.resolve(embedUrl, label, subtitleCallback, callback)
+            host.contains("nxsha") -> PlayNxsha.resolve(embedUrl, label, subtitleCallback, callback)
+            host.contains("vidout") -> PlayVidout.resolve(embedUrl, label, subtitleCallback, callback)
             else -> {
                 val handled = PlayPacker.resolvePackedEmbed(embedUrl, label, "https://multimovies.casa/", callback)
                 if (!handled) {
@@ -836,11 +961,25 @@ internal object MultimoviesSite {
         }
         val options = optionsOf(doc)
         if (options.isEmpty()) return
+        // several options resolve to the same cdn file, dedupe by url so the
+        // list does not show the same stream twice
+        val seenLinks = java.util.Collections.newSetFromMap(
+            java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        )
+        val seenSubs = java.util.Collections.newSetFromMap(
+            java.util.concurrent.ConcurrentHashMap<String, Boolean>()
+        )
+        val linkCb: (ExtractorLink) -> Unit = { link ->
+            if (seenLinks.add(link.url)) callback(link)
+        }
+        val subCb: (SubtitleFile) -> Unit = { sub ->
+            if (seenSubs.add(sub.url)) subtitleCallback(sub)
+        }
         coroutineScope {
             options.forEach { option ->
                 async(Dispatchers.IO) {
                     val embed = embedOf(domain, option, pageUrl) ?: return@async
-                    resolveEmbed(embed, option.label, subtitleCallback, callback)
+                    resolveEmbed(embed, option.label, subCb, linkCb)
                 }
             }
         }
@@ -874,7 +1013,6 @@ internal object MultimoviesSite {
                         return
                     }
                 } catch (e: Exception) {
-                    Log.d(PlayNet.TAG, "direct probe: ${e.message}")
                 }
             }
 
@@ -929,7 +1067,6 @@ internal object MultimoviesSite {
                             processPage(domain, direct, subtitleCallback, callback)
                         }
                     } catch (e: Exception) {
-                        Log.d(PlayNet.TAG, "episode probe: ${e.message}")
                     }
                 }
             }
