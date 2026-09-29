@@ -1,4 +1,4 @@
-package com.raghav.donation
+package com.netnaija.donation
 
 import android.annotation.SuppressLint
 import android.app.Dialog

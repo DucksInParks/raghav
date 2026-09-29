@@ -1,4 +1,4 @@
-package com.netnaija.settings
+package com.netnaija.app.settings
 
 import android.annotation.SuppressLint
 import android.content.Context
@@ -22,9 +22,9 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.widget.SwitchCompat
 import androidx.fragment.app.DialogFragment
 import com.lagradost.cloudstream3.MainActivity
-import com.netnaija.NetNaijaSources
+import com.netnaija.app.NetNaijaAppSources
 
-class SourceSettingsFragment : DialogFragment() {
+class NetNaijaAppSourcesFragment : DialogFragment() {
 
     private val cText = Color.parseColor("#F4F4F6")
     private val cSub = Color.parseColor("#8F8F98")
@@ -56,7 +56,7 @@ class SourceSettingsFragment : DialogFragment() {
         val d = resources.displayMetrics.density
         fun Int.dp() = (this * d).toInt()
 
-        pending.addAll(NetNaijaSources.disabled())
+        pending.addAll(NetNaijaAppSources.disabled())
 
         val scroll = ScrollView(ctx)
         val root = LinearLayout(ctx).apply {
@@ -71,7 +71,7 @@ class SourceSettingsFragment : DialogFragment() {
         scroll.addView(root)
 
         root.addView(TextView(ctx).apply {
-            text = "NETNAIJA"
+            text = "NETNAIJA APP"
             textSize = 11f; setTextColor(Color.parseColor("#FF2E3B"))
             setTypeface(typeface, Typeface.BOLD); letterSpacing = 0.24f
         })
@@ -105,7 +105,7 @@ class SourceSettingsFragment : DialogFragment() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(6.dp(), 14.dp(), 6.dp(), 10.dp())
             addView(TextView(ctx).apply {
-                text = "AUDIO TRACKS & HARDSUBS"
+                text = "AUDIO TRACKS"
                 textSize = 11f; setTextColor(cSub); setTypeface(typeface, Typeface.BOLD); letterSpacing = 0.14f
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
@@ -168,7 +168,7 @@ class SourceSettingsFragment : DialogFragment() {
     }
 
     private fun save(ctx: Context) {
-        NetNaijaSources.setDisabled(pending)
+        NetNaijaAppSources.setDisabled(pending)
         AlertDialog.Builder(ctx)
             .setTitle("Restart Required")
             .setMessage("Sources saved. Restart CloudStream now to apply them?")
@@ -203,7 +203,7 @@ class SourceSettingsFragment : DialogFragment() {
         list.removeAllViews()
         switches.clear()
 
-        val sources = NetNaijaSources.knownSources()
+        val sources = NetNaijaAppSources.knownSources()
             .filter { query.isEmpty() || it.lowercase().contains(query) }
 
         if (sources.isEmpty()) {
@@ -263,7 +263,7 @@ class SourceSettingsFragment : DialogFragment() {
     }
 
     private fun updateCount() {
-        val sources = NetNaijaSources.knownSources()
+        val sources = NetNaijaAppSources.knownSources()
         val on = sources.count { it !in pending }
         countView?.text = "$on/${sources.size} ON"
     }

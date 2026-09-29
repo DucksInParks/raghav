@@ -1,4 +1,4 @@
-package com.raghav.donation
+package com.netnaija.app.donation
 
 import android.content.Context
 import android.content.SharedPreferences

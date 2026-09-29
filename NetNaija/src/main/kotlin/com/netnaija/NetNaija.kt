@@ -32,7 +32,7 @@ import java.net.URLEncoder
 import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.TimeUnit
-import com.raghav.donation.DonationManager
+import com.netnaija.donation.DonationManager
 
 class NetNaija : MainAPI() {
     override var mainUrl = "https://netnaija.film"
@@ -384,7 +384,6 @@ class NetNaija : MainAPI() {
                     try {
                         mapper.convertValue(entry, NetNaijaSubject::class.java).toSearchResponse()
                     } catch (e: Exception) {
-                        Log.d(TAG, "nuxt entry skipped: ${e.message}")
                         null
                     }
                 }
@@ -478,7 +477,7 @@ class NetNaija : MainAPI() {
             NetNaijaSources.register(dubs.mapNotNull { sourceLabel(it) })
 
             if (tvType == TvType.Movie || seasons.isEmpty()) {
-                // Movie - store all dub subjectIds so loadLinks can fetch each audio
+                // store all dub subjectIds so loadLinks can fetch each audio
                 val movieData = NetNaijaEpisodeData(dubs = dubs, season = 0, episode = 0).toJson()
                 return newMovieLoadResponse(title, url, tvType, movieData) {
                     this.posterUrl = poster
