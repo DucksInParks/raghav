@@ -22,7 +22,7 @@ object FirebaseDomainHelper {
         val now = System.currentTimeMillis()
         if (!force && everLoadedSuccessfully && now - lastLoadTime < CACHE_TTL_MS) return
         try {
-            val response = app.get(URL, timeout = 5000L).text
+            val response = app.get(URL, timeout = 5L).text
             val parsed = parseJson<Map<String, String>>(response)
             domains = parsed.filterValues { it.isNotBlank() }
                 .mapValues { it.value.trim().trimEnd('/') }

@@ -18,9 +18,10 @@ import java.net.URI
 
 internal object DrivePages {
     // hosts that never carry a playable file: cloudflare walled mirrors, site
-    // plumbing and ad jumps, everything else found on the drive pages is fair game
+    // plumbing and ad jumps, gdtot filebee and filepress stay out of this list
+    // because loadExtractor may still resolve them through another extension
     private val junk = Regex(
-        "gdtot|filebee|filepress|gmpg\\.org|googleapis|googletagmanager|fonts\\.|schema\\.org|w3\\.org|" +
+        "gmpg\\.org|googleapis|googletagmanager|fonts\\.|schema\\.org|w3\\.org|" +
             "twitter\\.com|facebook\\.com|pinterest|whatsapp|telegram|t\\.me/|/tg/|catimages|tinyurl|bonuscaf|" +
             "winexch|a-ads|pixabay|i-poster|scene-source|vglist|vegamovies-apk|hdhub4u\\.download|hdhub4u\\.tv"
     )
@@ -77,7 +78,7 @@ internal object DrivePages {
             // mobilejsr rest loops redirects for some visitors, nexdrive serves the same app
             val fetchUrl = driveUrl.replace("mobilejsr.rest", "nexdrive.fit")
             val res = try {
-                app.get(fetchUrl, headers = PlayNet.headers(referer), timeout = 20000L)
+                app.get(fetchUrl, headers = PlayNet.headers(referer), timeout = 20L)
             } catch (e: Exception) {
                 PlayNet.followManually(fetchUrl, referer) ?: throw e
             }
@@ -188,7 +189,7 @@ internal object VegaMoviesSite {
         val text = app.get(
             "$api/search.php?q=${Uri.encode(query)}",
             headers = headers(api),
-            timeout = 15000L
+            timeout = 15L
         ).text
         AppUtils.parseJson<VegaResponse>(text).hits.mapNotNull { it.document }
     } catch (e: Exception) {
@@ -213,7 +214,8 @@ internal object VegaMoviesSite {
     }
 
     // every quality row sits between two headings, the download anchors below a
-    // heading belong to the label of that heading
+    // heading belong to the label of that heading, a button counts when it is a
+    // dwd button or points straight at a known drive host
     private fun collectRows(doc: Document, season: Int?): List<Pair<String, String>> {
         val seasonRegex = season?.let { Regex("(?i)Season\\s*$it(?!\\d)|\\bS${it.toString().padStart(2, '0')}\\b") }
         val heads = doc.select("h3, h4, h5").filter { el ->
@@ -231,7 +233,12 @@ internal object VegaMoviesSite {
                     if (!href.startsWith("http")) continue
                     if (text.contains("Batch", true) || text.contains("Zip", true)) continue
                     if (a.selectFirst("button.dwd-button") != null ||
-                        text.contains("V-Cloud", true) || text.contains("G-Direct", true)
+                        text.contains("V-Cloud", true) || text.contains("G-Direct", true) ||
+                        listOf(
+                            "nexdrive", "mobilejsr", "fastdl", "vcloud", "hubcloud", "gdflix",
+                            "gdlink", "gdtot", "filebee", "filepress", "pixeldrain", "gofile",
+                            "dropgalaxy", "hubdrive", "hubcdn", "hblinks"
+                        ).any { href.contains(it, true) }
                     ) {
                         targets.add(href to label)
                     }
@@ -265,7 +272,7 @@ internal object VegaMoviesSite {
             val target = pickDoc(docs, res) ?: return
             val permalink = target.permalink?.takeIf { it.isNotBlank() } ?: return
             val postUrl = if (permalink.startsWith("http")) permalink else api + permalink
-            val doc = app.get(postUrl, headers = headers(api), timeout = 20000L).document
+            val doc = app.get(postUrl, headers = headers(api), timeout = 20L).document
 
             val rows = collectRows(doc, res.season)
             if (res.season == null) {
@@ -305,7 +312,7 @@ internal object HdHub4uSite {
             val text = app.get(
                 url,
                 headers = mapOf("User-Agent" to PLAY_UA, "Referer" to "$domain/"),
-                timeout = 15000L
+                timeout = 15L
             ).text
             val hits = org.json.JSONObject(text).optJSONArray("hits") ?: return emptyList()
             (0 until hits.length()).mapNotNull { i ->
@@ -351,7 +358,7 @@ internal object HdHub4uSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val doc = app.get(postUrl, headers = PlayNet.headers("$domain/"), timeout = 20000L).document
+            val doc = app.get(postUrl, headers = PlayNet.headers("$domain/"), timeout = 20L).document
             if (res.season != null) {
                 val epRegex = Regex("(?i)episode\\s*(\\d+)")
                 for (h3 in doc.select("h3")) {
@@ -484,7 +491,7 @@ internal object FourKhdHubSite {
             val searchDoc = app.get(
                 "$domain/?s=${Uri.encode(title)}",
                 headers = PlayNet.headers(),
-                timeout = 20000L
+                timeout = 20L
             ).document
             val elements = searchDoc.select("div.card-grid > a.movie-card")
             fun contentOf(el: Element): String = el.selectFirst("div.movie-card-content")?.text()?.lowercase() ?: ""
@@ -498,7 +505,7 @@ internal object FourKhdHubSite {
 
             val href = matched.attr("href").trim()
             val detailUrl = if (href.startsWith("http")) href else domain + href
-            val doc = app.get(detailUrl, headers = PlayNet.headers(domain), timeout = 20000L).document
+            val doc = app.get(detailUrl, headers = PlayNet.headers(domain), timeout = 20L).document
 
             if (res.season != null) {
                 val seasonText = "S" + res.season.toString().padStart(2, '0')
@@ -558,7 +565,7 @@ internal object Movies4uSite {
         if (registryDomain == null && now - registryCheckedAt > 10 * 60 * 1000L) {
             registryCheckedAt = now
             registryDomain = try {
-                val text = app.get(DOMAIN_REGISTRY, timeout = 10000L).text
+                val text = app.get(DOMAIN_REGISTRY, timeout = 10L).text
                 JSONObject(text).optString("movies4u").takeIf { it.startsWith("http") }
             } catch (e: Exception) {
                 null
@@ -581,7 +588,7 @@ internal object Movies4uSite {
             val text = app.get(
                 "$domain/lookup.php?q=${Uri.encode(query)}&page=1&per_page=30",
                 headers = PlayNet.headers(),
-                timeout = 15000L
+                timeout = 15L
             ).text
             val hits = JSONObject(text).optJSONArray("hits") ?: return emptyList()
             (0 until hits.length()).mapNotNull { i ->
@@ -607,7 +614,7 @@ internal object Movies4uSite {
     }
 
     private suspend fun getDoc(url: String): Document? = try {
-        app.get(url, headers = PlayNet.headers(PlayNet.getBaseUrl(url)), timeout = 20000L).document
+        app.get(url, headers = PlayNet.headers(PlayNet.getBaseUrl(url)), timeout = 20L).document
     } catch (e: Exception) {
         null
     }
@@ -791,7 +798,7 @@ internal object TmfSite {
             val searchDoc = app.get(
                 "$domain/?s=${Uri.encode(title)}",
                 headers = PlayNet.headers(),
-                timeout = 20000L
+                timeout = 20L
             ).document
             val anchors = searchDoc.select("article.latestpost a[id=featured-thumbnail]")
                 .mapNotNull { el ->
@@ -806,7 +813,7 @@ internal object TmfSite {
             } ?: anchors.firstOrNull() ?: return
 
             val postUrl = target.second
-            val doc = app.get(postUrl, headers = PlayNet.headers(domain), timeout = 20000L).document
+            val doc = app.get(postUrl, headers = PlayNet.headers(domain), timeout = 20L).document
             val groups = doc.select("div.mfx-download-group")
 
             if (res.season == null) {
@@ -900,7 +907,7 @@ internal object MultimoviesSite {
                     "nume" to option.nume,
                     "type" to option.type
                 ),
-                timeout = 15000L
+                timeout = 15L
             ).text
             PlayNet.deEsc(org.json.JSONObject(text).optString("embed_url"))
                 .trim()
@@ -932,7 +939,7 @@ internal object MultimoviesSite {
                 val handled = PlayPacker.resolvePackedEmbed(embedUrl, label, "https://multimovies.casa/", callback)
                 if (!handled) {
                     try {
-                        val res = app.get(embedUrl, headers = PlayNet.headers("https://multimovies.casa/"), timeout = 20000L)
+                        val res = app.get(embedUrl, headers = PlayNet.headers("https://multimovies.casa/"), timeout = 20L)
                         val text = res.text
                         val unpacked = if (text.contains("eval(function(p,a,c,k,e,d)")) {
                             runCatching { getAndUnpack(text) }.getOrNull() ?: text
@@ -955,7 +962,7 @@ internal object MultimoviesSite {
         callback: (ExtractorLink) -> Unit
     ) {
         val doc = try {
-            app.get(pageUrl, headers = PlayNet.headers(domain), timeout = 20000L).document
+            app.get(pageUrl, headers = PlayNet.headers(domain), timeout = 20L).document
         } catch (e: Exception) {
             return
         }
@@ -1007,7 +1014,7 @@ internal object MultimoviesSite {
 
             if (direct != null) {
                 try {
-                    val probe = app.get(direct, headers = PlayNet.headers(domain), timeout = 15000L)
+                    val probe = app.get(direct, headers = PlayNet.headers(domain), timeout = 15L)
                     if (probe.code == 200 && probe.text.contains("dooplay_player_option")) {
                         processPage(domain, direct, subtitleCallback, callback)
                         return
@@ -1019,7 +1026,7 @@ internal object MultimoviesSite {
             val searchDoc = app.get(
                 "$domain/?s=${Uri.encode(title)}",
                 headers = PlayNet.headers(domain),
-                timeout = 20000L
+                timeout = 20L
             ).document
             val candidates = searchDoc.select("article a[href], .result-item a[href], .items a[href]")
                 .mapNotNull { el ->
@@ -1045,7 +1052,7 @@ internal object MultimoviesSite {
                     }
                     return
                 }
-                val showDoc = app.get(showUrl, headers = PlayNet.headers(domain), timeout = 20000L).document
+                val showDoc = app.get(showUrl, headers = PlayNet.headers(domain), timeout = 20L).document
                 val episodeUrl = showDoc.select("div.se-c").mapNotNull { seC ->
                     val seasonNum = seC.selectFirst("span.se-t")?.text()?.trim()?.toIntOrNull()
                     if (seasonNum != res.season) null
@@ -1062,7 +1069,7 @@ internal object MultimoviesSite {
                     processPage(domain, episodeUrl, subtitleCallback, callback)
                 } else if (res.episode != null && direct != null) {
                     try {
-                        val probe = app.get(direct, headers = PlayNet.headers(domain), timeout = 15000L)
+                        val probe = app.get(direct, headers = PlayNet.headers(domain), timeout = 15L)
                         if (probe.code == 200 && probe.text.contains("dooplay_player_option")) {
                             processPage(domain, direct, subtitleCallback, callback)
                         }

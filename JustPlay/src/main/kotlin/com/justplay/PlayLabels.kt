@@ -12,11 +12,6 @@ internal object PlayLabels {
         "netnaija" to "NetNaija"
     )
 
-    // the 10gbps workers and the instant download buttons are the same dead
-    // workers behind two names, both stay dropped so the list stays playable
-    private val deadNameRegex = Regex("(?i)(10gbps|instant\\s*download|instantdownload)")
-    private val deadUrlRegex = Regex("(?i)(pixel\\.hubcloud\\.ist|gpdl\\d*\\.hubcloud\\.ist|rohitkiskk\\.workers\\.dev)")
-
     private val qualityRegex = Regex("(?i)\\b(2160p|1440p|1080[pi]|720[pi]|480[pi]|360p|240p|4k|8k|uhd)\\b")
     private val sizeRegex = Regex("(?i)\\b(\\d+(?:[.,]\\d+)?)\\s*(gb|mb)\\b")
     private val langRegex = Regex(
@@ -35,12 +30,6 @@ internal object PlayLabels {
 
     fun siteName(id: String): String =
         siteNames[id] ?: id.replaceFirstChar { it.uppercase() }
-
-    fun isDeadName(text: String): Boolean =
-        text.isNotBlank() && deadNameRegex.containsMatchIn(text)
-
-    fun isDeadUrl(url: String): Boolean =
-        deadUrlRegex.containsMatchIn(url)
 
     // drops emoji, arrows, box drawing and private use glyphs that leak into
     // headings and file names from the download sites

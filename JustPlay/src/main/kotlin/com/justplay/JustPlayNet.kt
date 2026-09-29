@@ -131,14 +131,33 @@ internal object PlayNet {
     // ad mirrors forever, walking the location headers by hand survives that
     suspend fun followManually(url: String, referer: String?): NiceResponse? {
         var current = url
-        repeat(8) {
+        repeat(15) {
             val res = try {
-                app.get(current, headers = headers(referer), allowRedirects = false, timeout = 15000L)
+                app.get(current, headers = headers(referer), allowRedirects = false, timeout = 15L)
             } catch (e: Exception) {
                 return null
             }
             val loc = res.headers["location"]?.trim().orEmpty()
             if (loc.isEmpty()) return res
+            current = absolute(loc, current)
+        }
+        return null
+    }
+
+    // the 10gbps buttons hide a google drive file behind a chain of worker
+    // redirects, the final url is the only playable one
+    suspend fun resolveRedirectTarget(url: String, referer: String? = null): String? {
+        var current = url
+        repeat(7) {
+            val res = try {
+                app.get(current, headers = headers(referer), allowRedirects = false, timeout = 8L)
+            } catch (e: Exception) {
+                return null
+            }
+            val loc = res.headers["location"]?.trim().orEmpty()
+            if (loc.isEmpty()) {
+                return current.takeIf { it.startsWith("http") }
+            }
             current = absolute(loc, current)
         }
         return null
@@ -152,7 +171,7 @@ internal object PlayNet {
                 url,
                 headers = headers(referer),
                 allowRedirects = true,
-                timeout = 15000L
+                timeout = 15L
             )
             val text = res.text
             val m1 = Regex("""s\('o','([A-Za-z0-9+/=]+)'""").findAll(text)
@@ -181,7 +200,7 @@ internal object PlayNet {
                     "$blog?re=$data",
                     headers = headers(url),
                     allowRedirects = false,
-                    timeout = 15000L
+                    timeout = 15L
                 )
                 val body = reRes.document.body().text().trim()
                 return body.ifBlank { o }.ifBlank { null }
@@ -202,7 +221,6 @@ internal object PlayNet {
         quality: Int?,
         link: ExtractorLink
     ): ExtractorLink? {
-        if (PlayLabels.isDeadName(link.name) || PlayLabels.isDeadUrl(link.url)) return null
         // the hubcloud family names its links "Server [file | size]", the
         // part before the bracket is the server, the rest is info
         val server = link.name.substringBefore(" [").trim()
@@ -232,7 +250,6 @@ internal object PlayNet {
         callback: (ExtractorLink) -> Unit,
     ) {
         if (url.isBlank()) return
-        if (PlayLabels.isDeadUrl(url) || PlayLabels.isDeadName(label)) return
         try {
             val collected = mutableListOf<ExtractorLink>()
             loadExtractor(url, referer, subtitleCallback) { link ->
@@ -257,7 +274,7 @@ internal object PlayNet {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ) {
-        if (url.isBlank() || PlayLabels.isDeadUrl(url)) return
+        if (url.isBlank()) return
         val host = hostOf(url)
         if (host.isEmpty()) return
         val resolver: (suspend (String?, (SubtitleFile) -> Unit, (ExtractorLink) -> Unit) -> Unit) = when {

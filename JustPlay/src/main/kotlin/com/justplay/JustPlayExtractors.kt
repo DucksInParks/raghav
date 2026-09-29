@@ -43,7 +43,7 @@ internal object PlayPacker {
     ): Boolean {
         if (m3u8.isBlank() || !m3u8.startsWith("http")) return false
         return try {
-            val master = app.get(m3u8, headers = PlayNet.headers(referer), timeout = 15000L).text
+            val master = app.get(m3u8, headers = PlayNet.headers(referer), timeout = 15L).text
             if (!master.contains("#EXTM3U")) return false
             // multimovies masters list their variants low to high, the first
             // resolution is always the lowest one so no quality is set here
@@ -70,7 +70,7 @@ internal object PlayPacker {
         callback: (ExtractorLink) -> Unit
     ): Boolean {
         return try {
-            val res = app.get(embedUrl, headers = PlayNet.headers(referer), timeout = 20000L)
+            val res = app.get(embedUrl, headers = PlayNet.headers(referer), timeout = 20L)
             val text = res.text
             val unpacked = if (text.contains("eval(function(p,a,c,k,e,d)")) {
                 runCatching { getAndUnpack(text) }.getOrNull() ?: text
@@ -95,7 +95,7 @@ internal object PlayModiplay {
         val base = PlayNet.getBaseUrl(embedUrl)
         if (base.isBlank()) return
         val html = try {
-            app.get(embedUrl, headers = PlayNet.headers("https://multimovies.casa/"), timeout = 20000L).text
+            app.get(embedUrl, headers = PlayNet.headers("https://multimovies.casa/"), timeout = 20L).text
         } catch (e: Exception) {
             return
         }
@@ -111,7 +111,6 @@ internal object PlayModiplay {
             return
         }
         for ((embed, platform, name, code) in servers) {
-            if (PlayLabels.isDeadName(name)) continue
             val linkLabel = "$label $name"
             var handled = false
             if (embed.startsWith("http")) {
@@ -135,7 +134,7 @@ internal object PlayModiplay {
     ): Boolean {
         val proxyUrl = "$base/proxy.php?p=$platform&c=$fileCode&title=&site_ref=&noredirect=1"
         val page = try {
-            app.get(proxyUrl, headers = PlayNet.headers(base), timeout = 20000L).text
+            app.get(proxyUrl, headers = PlayNet.headers(base), timeout = 20L).text
         } catch (e: Exception) {
             return false
         }
@@ -163,7 +162,7 @@ internal object PlayModiplay {
                     app.get(
                         "$base/api/subtitle_fetch.php?tmdb_id=$tmdbId&imdb_id=$imdbId&season=$season&ep=$ep&lang=$lang",
                         headers = PlayNet.headers(base),
-                        timeout = 15000L
+                        timeout = 15L
                     ).text
                 } catch (e: Exception) {
                     continue
@@ -193,7 +192,7 @@ internal object PlayGdmirror {
             val res = app.get(
                 embedUrl,
                 headers = PlayNet.headers("https://multimovies.casa/"),
-                timeout = 20000L
+                timeout = 20L
             )
             val page = res.text
             val finalUrl = res.url
@@ -218,7 +217,7 @@ internal object PlayGdmirror {
                     "$apiUrl/mymovieapi?${idType ?: "imdbid"}=$finalId&key=$myKey"
                 }
                 try {
-                    val apiRes = app.get(apiQuery, headers = PlayNet.headers(apiUrl), timeout = 20000L).text
+                    val apiRes = app.get(apiQuery, headers = PlayNet.headers(apiUrl), timeout = 20L).text
                     collectSlugs(apiRes, sids)
                 } catch (e: Exception) {
                 }
@@ -238,7 +237,7 @@ internal object PlayGdmirror {
                             "X-Requested-With" to "XMLHttpRequest"
                         ),
                         data = mapOf("sid" to s, "UserFavSite" to "", "currentDomain" to "[]"),
-                        timeout = 20000L
+                        timeout = 20L
                     ).text
                     val helper = JSONObject(helperRes)
                     val mresult = helper.optString("mresult")
@@ -254,7 +253,6 @@ internal object PlayGdmirror {
                         val suffix = src.optString("embed_suffix").takeIf { it != "null" && it.isNotBlank() } ?: ""
                         val code = codes[key] ?: continue
                         val friendly = src.optString("friendlyName").ifBlank { key }
-                        if (PlayLabels.isDeadName(friendly) || PlayLabels.isDeadName(key)) continue
                         val embed = "$siteUrl$code$suffix"
                         PlayPacker.resolvePackedEmbed(embed, "$label $friendly", playerBase, callback)
                     }
@@ -303,7 +301,7 @@ class PlayHubCloud : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         val res = try {
-            app.get(url, headers = PlayNet.headers(referer), timeout = 20000L)
+            app.get(url, headers = PlayNet.headers(referer), timeout = 20L)
         } catch (e: Exception) {
             return
         }
@@ -311,6 +309,13 @@ class PlayHubCloud : ExtractorApi() {
     }
 
     companion object {
+        // ads and site plumbing that sit next to the real download buttons on
+        // the hubcloud pages, none of them carry a file
+        private val hubJunk = Regex(
+            "tinyurl|t\\.me|telegram|/tg/|winexch|a-ads|snvhost|one\\.one\\.one\\.one|" +
+                "google\\.com/search|hubcloud\\.fans|drive/admin"
+        )
+
         // the drive page only carries a generate button now, the real servers
         // sit behind it and need the second request
         suspend fun emitHubServers(
@@ -336,9 +341,9 @@ class PlayHubCloud : ExtractorApi() {
                     val genDoc = app.get(
                         PlayNet.absolute(generate, base),
                         headers = PlayNet.headers(pageUrl),
-                        timeout = 20000L
+                        timeout = 20L
                     ).document
-                    if (emitGeneratedServers(genDoc, labelExtras, quality, callback)) return true
+                    if (emitGeneratedServers(genDoc, labelExtras, quality, subtitleCallback, callback)) return true
                 } catch (e: Exception) {
                     Log.d(PlayNet.TAG, "generate: ${e.message}")
                 }
@@ -353,7 +358,7 @@ class PlayHubCloud : ExtractorApi() {
                     val innerDoc = app.get(
                         PlayNet.absolute(inner, base),
                         headers = PlayNet.headers(base),
-                        timeout = 20000L
+                        timeout = 20L
                     ).document
                     if (emitHubServers(innerDoc, base, inner, subtitleCallback, callback)) return true
                 } catch (e: Exception) {
@@ -364,7 +369,7 @@ class PlayHubCloud : ExtractorApi() {
                 val text = btn.text()
                 val link = btn.attr("href").trim()
                 if (link.isBlank()) continue
-                if (listOf("tinyurl", "telegram", "/tg/").any { link.contains(it) }) continue
+                if (hubJunk.containsMatchIn(link)) continue
                 val label = text.trim().lowercase()
                 val abs = PlayNet.absolute(link, base)
                 when {
@@ -382,7 +387,7 @@ class PlayHubCloud : ExtractorApi() {
                                 "$abs/download",
                                 referer = abs,
                                 allowRedirects = false,
-                                timeout = 15000L
+                                timeout = 15L
                             ).headers["hx-redirect"] ?: ""
                             if (dlink.isNotBlank()) {
                                 callback(newExtractorLink("Hub-Cloud", "BuzzServer [$labelExtras]", PlayNet.absolute(dlink, PlayNet.getBaseUrl(abs)), ExtractorLinkType.VIDEO) { this.quality = quality })
@@ -390,6 +395,38 @@ class PlayHubCloud : ExtractorApi() {
                             }
                         } catch (e: Exception) {
                             Log.d(PlayNet.TAG, "buzzserver: ${e.message}")
+                        }
+                    }
+                    label.contains("10gbps") -> {
+                        try {
+                            val target = PlayNet.resolveRedirectTarget(abs, base)
+                            if (target != null) {
+                                val direct = if (target.contains("link=")) target.substringAfter("link=") else target
+                                if (direct.startsWith("http")) {
+                                    callback(newExtractorLink("Hub-Cloud", "10Gbps [Download] [$labelExtras]", direct, ExtractorLinkType.VIDEO) { this.quality = quality })
+                                    emitted = true
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.d(PlayNet.TAG, "10gbps: ${e.message}")
+                        }
+                    }
+                    label.contains("instant download") || label.contains("instant dl") -> {
+                        try {
+                            val loc = app.get(abs, headers = PlayNet.headers(base), allowRedirects = false, timeout = 10L)
+                                .headers["location"]?.trim()
+                            val direct = when {
+                                loc == null -> null
+                                loc.contains("url=") -> loc.substringAfter("url=")
+                                loc.contains("link=") -> loc.substringAfter("link=")
+                                else -> loc
+                            }?.takeIf { it.startsWith("http") }
+                            if (direct != null) {
+                                callback(newExtractorLink("Hub-Cloud", "Instant Download [$labelExtras]", direct, ExtractorLinkType.VIDEO) { this.quality = quality })
+                                emitted = true
+                            }
+                        } catch (e: Exception) {
+                            Log.d(PlayNet.TAG, "instant: ${e.message}")
                         }
                     }
                     label.contains("pixeldra") || label.contains("pixelserver") || label.contains("pixel server") || link.contains("pixeldra") -> {
@@ -411,16 +448,25 @@ class PlayHubCloud : ExtractorApi() {
                         PlayGofile().getUrl(abs, base, subtitleCallback, callback)
                         emitted = true
                     }
+                    abs.startsWith("http") -> {
+                        try {
+                            emitted = loadExtractor(abs, base, subtitleCallback, callback) || emitted
+                        } catch (e: Exception) {
+                            Log.d(PlayNet.TAG, "hub button: ${e.message}")
+                        }
+                    }
                 }
             }
             return emitted
         }
 
-        // generated page carries a signed r2 link, a pixel server and a pixeldrain mirror
+        // generated page carries the 10gbps worker, a download file mirror,
+        // a pixel server and a signed r2 link
         private suspend fun emitGeneratedServers(
             doc: Document,
             labelExtras: String,
             quality: Int,
+            subtitleCallback: (SubtitleFile) -> Unit,
             callback: (ExtractorLink) -> Unit
         ): Boolean {
             var emitted = false
@@ -428,16 +474,61 @@ class PlayHubCloud : ExtractorApi() {
                 val text = a.text().trim().lowercase()
                 val href = a.attr("href").trim()
                 if (!href.startsWith("http")) continue
+                if (hubJunk.containsMatchIn(href)) continue
                 when {
                     text.contains("fsl") || href.contains("cloudflarestorage.com") -> {
                         callback(newExtractorLink("Hub-Cloud", "FSL Server [$labelExtras]", href, ExtractorLinkType.VIDEO) { this.quality = quality })
                         emitted = true
                     }
-                    text.contains("pixelserver") || href.contains("pixeldrain") -> {
+                    text.contains("pixelserver") || text.contains("pixeldra") || href.contains("pixeldrain") -> {
                         val final = if (href.contains("download", true)) href
                         else "https://pixeldrain.dev/api/file/${href.substringAfterLast("/u/")}?download"
                         callback(newExtractorLink("Hub-Cloud", "Pixeldrain [$labelExtras]", final, ExtractorLinkType.VIDEO) { this.quality = quality })
                         emitted = true
+                    }
+                    text.contains("10gbps") -> {
+                        try {
+                            val target = PlayNet.resolveRedirectTarget(href)
+                            if (target != null) {
+                                val direct = if (target.contains("link=")) target.substringAfter("link=") else target
+                                if (direct.startsWith("http")) {
+                                    callback(newExtractorLink("Hub-Cloud", "10Gbps [Download] [$labelExtras]", direct, ExtractorLinkType.VIDEO) { this.quality = quality })
+                                    emitted = true
+                                }
+                            }
+                        } catch (e: Exception) {
+                            Log.d(PlayNet.TAG, "10gbps gen: ${e.message}")
+                        }
+                    }
+                    text.contains("instant download") || text.contains("instant dl") -> {
+                        try {
+                            val loc = app.get(href, headers = PlayNet.headers(), allowRedirects = false, timeout = 10L)
+                                .headers["location"]?.trim()
+                            val direct = when {
+                                loc == null -> null
+                                loc.contains("url=") -> loc.substringAfter("url=")
+                                loc.contains("link=") -> loc.substringAfter("link=")
+                                else -> loc
+                            }?.takeIf { it.startsWith("http") }
+                            if (direct != null) {
+                                callback(newExtractorLink("Hub-Cloud", "Instant Download [$labelExtras]", direct, ExtractorLinkType.VIDEO) { this.quality = quality })
+                                emitted = true
+                            }
+                        } catch (e: Exception) {
+                            Log.d(PlayNet.TAG, "instant gen: ${e.message}")
+                        }
+                    }
+                    text.contains("download file") || text.contains("download now") || text.contains("download] ") -> {
+                        callback(newExtractorLink("Hub-Cloud", "Download File [$labelExtras]", href, ExtractorLinkType.VIDEO) { this.quality = quality })
+                        emitted = true
+                    }
+                    href.contains("gofile.io") -> {
+                        try {
+                            PlayGofile().getUrl(href, "", subtitleCallback, callback)
+                            emitted = true
+                        } catch (e: Exception) {
+                            Log.d(PlayNet.TAG, "gofile gen: ${e.message}")
+                        }
                     }
                 }
             }
@@ -462,7 +553,7 @@ class PlayVCloud : ExtractorApi() {
                 url,
                 headers = PlayNet.headers(referer),
                 interceptor = PlayNet.cfKiller,
-                timeout = 20000L
+                timeout = 20L
             )
             val doc = res.document
             val base = PlayNet.getBaseUrl(res.url)
@@ -479,7 +570,7 @@ class PlayVCloud : ExtractorApi() {
             if (link.isNullOrBlank()) return
             val abs = if (link.startsWith("http")) link else base + link
             val targetDoc = try {
-                app.get(abs, headers = PlayNet.headers(base), timeout = 20000L).document
+                app.get(abs, headers = PlayNet.headers(base), timeout = 20L).document
             } catch (e: Exception) {
                 Log.d(PlayNet.TAG, "vcloud target: ${e.message}")
                 return
@@ -502,7 +593,7 @@ internal object PlayDirectStub {
             val res = app.get(
                 url,
                 headers = PlayNet.headers(referer ?: "https://nexdrive.fit/"),
-                timeout = 20000L
+                timeout = 20L
             )
             val text = res.text
             val embedded = Regex("""var\s+reurl\s*=\s*"([^"]+)"""").find(text)?.groupValues?.get(1)
@@ -593,7 +684,7 @@ class PlayHblinks : ExtractorApi() {
                 url,
                 headers = PlayNet.headers(referer),
                 interceptor = PlayNet.cfKiller,
-                timeout = 20000L
+                timeout = 20L
             ).document
             val seen = mutableSetOf<String>()
             for (a in doc.select("div.entry-content a[href]")) {
@@ -623,7 +714,7 @@ class PlayHubdrive : ExtractorApi() {
                 url,
                 headers = PlayNet.headers(referer),
                 interceptor = PlayNet.cfKiller,
-                timeout = 20000L
+                timeout = 20L
             ).document
             val seen = mutableSetOf<String>()
             for (a in doc.select("div.entry-content a[href], main a[href], a[href*='hubcloud']")) {
@@ -661,7 +752,7 @@ class PlayGofile : ExtractorApi() {
             val api = "https://api.gofile.io"
             val token = try {
                 JSONObject(
-                    app.post("$api/accounts", timeout = 15000L).text
+                    app.post("$api/accounts", timeout = 15L).text
                 ).getJSONObject("data").getString("token")
             } catch (e: Exception) {
                 Log.d(PlayNet.TAG, "gofile token: ${e.message}")
@@ -669,7 +760,7 @@ class PlayGofile : ExtractorApi() {
             }
             val wt = try {
                 Regex("""appdata\.wt\s*=\s*["']([^"']+)["']""").find(
-                    app.get("$api/dist/js/global.js", timeout = 15000L).text
+                    app.get("$api/dist/js/global.js", timeout = 15L).text
                 )?.groupValues?.get(1)
             } catch (e: Exception) {
                 null
@@ -679,7 +770,7 @@ class PlayGofile : ExtractorApi() {
             val contentRes = app.get(
                 contentUrl,
                 headers = mapOf("Authorization" to "Bearer $token"),
-                timeout = 20000L
+                timeout = 20L
             ).text
             val data = JSONObject(contentRes).getJSONObject("data")
             val children = data.optJSONObject("children") ?: return
@@ -777,7 +868,7 @@ open class PlayGDFlix : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val res = app.get(url, headers = PlayNet.headers(referer), timeout = 20000L)
+            val res = app.get(url, headers = PlayNet.headers(referer), timeout = 20L)
             val doc = res.document
             val base = PlayNet.getBaseUrl(res.url)
             val fileName = doc.select("ul > li.list-group-item:contains(Name)").text()
@@ -789,7 +880,6 @@ open class PlayGDFlix : ExtractorApi() {
 
             suspend fun emit(link: String, server: String) {
                 if (!link.startsWith("http")) return
-                if (PlayLabels.isDeadName(server) || PlayLabels.isDeadName(link)) return
                 val extras = listOf(fileName, sizeText).filter { it.isNotBlank() }.joinToString(" ")
                 callback(
                     newExtractorLink(
@@ -810,8 +900,33 @@ open class PlayGDFlix : ExtractorApi() {
                 if (link.isBlank() || link.startsWith("#")) continue
                 val abs = PlayNet.absolute(link, base)
                 when {
-                    text.contains("Instant DL", true) || text.contains("10GBPS", true) -> {}
                     text.contains("Login To DL", true) || link.startsWith("/login") -> {}
+                    text.contains("Instant DL", true) || text.contains("Instant Download", true) -> {
+                        try {
+                            val loc = app.get(abs, headers = PlayNet.headers(res.url), allowRedirects = false, timeout = 10L)
+                                .headers["location"]?.trim()
+                            val direct = when {
+                                loc == null -> null
+                                loc.contains("url=") -> loc.substringAfter("url=")
+                                loc.contains("link=") -> loc.substringAfter("link=")
+                                else -> loc
+                            }?.takeIf { it.startsWith("http") }
+                            if (direct != null) emit(direct, "Instant Download")
+                        } catch (e: Exception) {
+                            Log.d(PlayNet.TAG, "instant dl: ${e.message}")
+                        }
+                    }
+                    text.contains("10GBPS", true) -> {
+                        try {
+                            val target = PlayNet.resolveRedirectTarget(abs, res.url)
+                            if (target != null) {
+                                val direct = if (target.contains("link=")) target.substringAfter("link=") else target
+                                emit(direct, "10Gbps")
+                            }
+                        } catch (e: Exception) {
+                            Log.d(PlayNet.TAG, "10gbps: ${e.message}")
+                        }
+                    }
                     text.contains("DRIVEBOT", true) || link.contains("drivebot") -> {
                         driveBot(abs, fileName, sizeText, quality, callback)
                     }
@@ -821,7 +936,7 @@ open class PlayGDFlix : ExtractorApi() {
                             val cloudDoc = app.get(
                                 abs,
                                 headers = PlayNet.headers(res.url),
-                                timeout = 20000L
+                                timeout = 20L
                             ).document
                             cloudDoc.selectFirst("div.card-body a")?.attr("href")?.trim()
                                 ?.takeIf { it.startsWith("http") }?.let { emit(it, "Cloud") }
@@ -854,7 +969,7 @@ open class PlayGDFlix : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val page = app.get(url, headers = PlayNet.headers(), timeout = 20000L)
+            val page = app.get(url, headers = PlayNet.headers(), timeout = 20L)
             val body = page.text
             val token = Regex("""formData\.append\('token', '([a-f0-9]+)'""")
                 .find(body)?.groupValues?.get(1)
@@ -869,7 +984,7 @@ open class PlayGDFlix : ExtractorApi() {
                     "Content-Type" to "application/x-www-form-urlencoded"
                 ),
                 data = mapOf("token" to token),
-                timeout = 20000L
+                timeout = 20L
             ).text
             val link = Regex(""""url"\s*:\s*"(.*?)"""").find(answer)?.groupValues?.get(1)
                 ?.replace("\\", "")
@@ -909,7 +1024,7 @@ internal object PlayNxsha {
             app.get(
                 "$BASE$path?q=${java.net.URLEncoder.encode(q, "UTF-8")}",
                 headers = PlayNet.headers(referer),
-                timeout = 20000L
+                timeout = 20L
             ).text
         } catch (e: Exception) {
             null
@@ -952,7 +1067,7 @@ internal object PlayNxsha {
 
     private suspend fun imdbToTmdb(imdbId: String): String? {
         val body = try {
-            app.get("$TMDB_PROXY/find/$imdbId?external_source=imdb_id", timeout = 15000L).text
+            app.get("$TMDB_PROXY/find/$imdbId?external_source=imdb_id", timeout = 15L).text
         } catch (e: Exception) {
             return null
         }
@@ -1067,7 +1182,7 @@ internal object PlayVidout {
     )
 
     private suspend fun getText(url: String): String? = try {
-        val res = app.get(url, headers = PlayNet.headers(), timeout = 15000L)
+        val res = app.get(url, headers = PlayNet.headers(), timeout = 15L)
         if (res.isSuccessful) res.text else null
     } catch (e: Exception) {
         null
@@ -1101,7 +1216,7 @@ internal object PlayVidout {
                     val body = try {
                         app.get(
                             "https://db.speedracelight.com/3/find/$id?external_source=imdb_id",
-                            timeout = 15000L
+                            timeout = 15L
                         ).text
                     } catch (e: Exception) {
                         return false

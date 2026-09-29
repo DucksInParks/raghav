@@ -144,7 +144,7 @@ internal object NetNaijaSite {
                 val response = app.get(
                     "$BFF/subject/trending?page=1&perPage=1",
                     headers = baseHeaders(site) + mapOf("X-Client-Token" to xClientToken()),
-                    timeout = 15000L
+                    timeout = 15L
                 )
                 readToken(response)
                 token
@@ -217,7 +217,7 @@ internal object NetNaijaSite {
                 "$BFF/subject/search",
                 headers = authHeaders(site),
                 json = mapOf("keyword" to title, "page" to 1, "perPage" to 30),
-                timeout = 15000L
+                timeout = 15L
             )
             readToken(searchRes)
             val items = try {
@@ -232,7 +232,7 @@ internal object NetNaijaSite {
                 "$BFF/detail",
                 params = mapOf("detailPath" to detailPath),
                 headers = authHeaders(site),
-                timeout = 15000L
+                timeout = 15L
             )
             readToken(detailRes)
             val detail = try {
@@ -282,7 +282,7 @@ internal object NetNaijaSite {
                                         "Referer" to "$site/videoPlayPage/$dubDetailPath"
                                     )
                                 ),
-                                timeout = 20000L
+                                timeout = 20L
                             )
                             readToken(playRes)
                             val play = try {
@@ -393,7 +393,7 @@ internal object NetNaijaSite {
                                             "detailPath" to dubDetailPath
                                         ),
                                         headers = authHeaders(site),
-                                        timeout = 15000L
+                                        timeout = 15L
                                     ).text
                                     AppUtils.parseJson<NaCaptionResponse>(capRes).data?.captions?.forEach { cap ->
                                         if (!cap.url.isNullOrBlank()) {
