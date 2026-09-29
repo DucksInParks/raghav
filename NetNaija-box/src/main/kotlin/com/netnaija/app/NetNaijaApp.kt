@@ -23,6 +23,7 @@ import com.lagradost.cloudstream3.TvType
 import com.lagradost.cloudstream3.LoadResponse.Companion.addImdbId
 import com.lagradost.cloudstream3.LoadResponse.Companion.addTMDbId
 import com.lagradost.cloudstream3.app
+import com.lagradost.cloudstream3.addDate
 import com.lagradost.cloudstream3.mainPageOf
 import com.lagradost.cloudstream3.newEpisode
 import com.lagradost.cloudstream3.newHomePageResponse
@@ -111,9 +112,9 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
     }
 
     override var mainUrl = sharedPref?.getString("netnaija_app_host", HOST_POOL[4]) ?: HOST_POOL[4]
-    override var name = "NetNaija (app)"
+    override var name = "NetNaija-box"
     override val hasMainPage = true
-    override var lang = "hi"
+    override var lang = "en"
     override val supportedTypes = setOf(TvType.Movie, TvType.TvSeries, TvType.Live)
 
     private val random = SecureRandom()
@@ -534,7 +535,6 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
         }
 
         return try {
-            val mapper = mapper
             val root = mapper.readTree(response.text)
             // rankings arrive under data.items, browse rows under data.subjects
             val items = root.get("data")?.get("items") ?: root.get("data")?.get("subjects")
@@ -907,17 +907,35 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                 }
             }
 
+            // cinemeta carries per episode stills, titles and airdates,
+            // anything missing falls back to the show cover and a plain label
+            val metaVideos = try {
+                meta?.get("videos")?.toList() ?: emptyList()
+            } catch (e: Exception) {
+                emptyList()
+            }
+
             val episodes = ArrayList<Episode>()
             val apiGetUrl = "$mainUrl/wefeed-mobile-bff/subject-api/get?subjectId=$id"
             for ((seasonNumber, episodeNumbers) in episodeMap) {
                 for (episodeNumber in episodeNumbers.sorted()) {
                     val epUrl = "$apiGetUrl|$seasonNumber|$episodeNumber|$detailPath|$detailDomain"
+                    val info = metaVideos.firstOrNull {
+                        it.get("season")?.asInt() == seasonNumber && it.get("episode")?.asInt() == episodeNumber
+                    }
                     episodes.add(
                         newEpisode(epUrl) {
-                            this.name = "S${seasonNumber}E${episodeNumber}"
+                            this.name = info?.get("name")?.asText()?.takeUnless { it.isBlank() }
+                                ?: "S${seasonNumber}E${episodeNumber}"
                             this.season = seasonNumber
                             this.episode = episodeNumber
-                            this.description = "Season $seasonNumber Episode $episodeNumber"
+                            this.posterUrl = info?.get("thumbnail")?.asText()?.takeUnless { it.isBlank() }
+                                ?: coverUrl
+                            this.description = info?.get("overview")?.asText()?.takeUnless { it.isBlank() }
+                                ?: info?.get("description")?.asText()?.takeUnless { it.isBlank() }
+                                ?: "Season $seasonNumber Episode $episodeNumber"
+                            this.runTime = info?.get("runtime")?.asText()?.filter { it.isDigit() }?.toIntOrNull()
+                            info?.get("released")?.asText()?.takeUnless { it.isBlank() }?.let { addDate(it) }
                         }
                     )
                 }
@@ -1189,7 +1207,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                 val mainPath = freshPlayPath ?: matchData.playPath
                 if (!mainPath.isNullOrBlank() && mainPath.startsWith("http")) {
                     callback(
-                        com.lagradost.cloudstream3.utils.newExtractorLink("NetNaija Live", "Live Stream (Main)", mainPath, ExtractorLinkType.M3U8) {
+                        com.lagradost.cloudstream3.utils.newExtractorLink("NetNaija-box Live", "Live Stream (Main)", mainPath, ExtractorLinkType.M3U8) {
                             this.referer = SPORT_URL
                             this.headers = mapOf(
                                 "Referer" to SPORT_URL,
@@ -1216,7 +1234,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                         val channelReferer = if (rawPath.contains("88player.top")) "https://play.88player.top/" else SPORT_URL
                         callback(
                             com.lagradost.cloudstream3.utils.newExtractorLink(
-                                "NetNaija Live",
+                                "NetNaija-box Live",
                                 "Live Channel - $channelTitle",
                                 streamUrl,
                                 if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO
@@ -1244,7 +1262,7 @@ class NetNaijaApp(private val sharedPref: SharedPreferences?) : MainAPI() {
                 val isM3u8 = videoData.url.contains("m3u8")
                 callback(
                     com.lagradost.cloudstream3.utils.newExtractorLink(
-                        "NetNaija Sports",
+                        "NetNaija-box Sports",
                         videoData.title,
                         videoData.url,
                         if (isM3u8) ExtractorLinkType.M3U8 else ExtractorLinkType.VIDEO

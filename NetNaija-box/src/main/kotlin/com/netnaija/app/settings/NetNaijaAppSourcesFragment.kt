@@ -71,7 +71,7 @@ class NetNaijaAppSourcesFragment : DialogFragment() {
         scroll.addView(root)
 
         root.addView(TextView(ctx).apply {
-            text = "NETNAIJA APP"
+            text = "NETNAIJA-BOX"
             textSize = 11f; setTextColor(Color.parseColor("#FF2E3B"))
             setTypeface(typeface, Typeface.BOLD); letterSpacing = 0.24f
         })

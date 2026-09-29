@@ -12,8 +12,8 @@ dependencies {
 }
 
 cloudstream {
-    language = "hi"
-    description = "NetNaija (app) - Multi Language Movies, Series and Live Sports. HD streaming with multiple dubs and subtitles."
+    language = "en"
+    description = "NetNaija-box - Multi Language Movies, Series and Live Sports. HD streaming with multiple dubs and subtitles."
     authors = listOf("raghav")
     status = 1
     requiresResources = true
