@@ -128,18 +128,73 @@ internal object PlayNet {
     }
 
     // okhttp gives up after 20 redirects and some drive pages bounce between
-    // ad mirrors forever, walking the location headers by hand survives that
+    // ad mirrors forever, walking the location headers by hand survives that,
+    // the jar matters because cloudflare hands out the clearance cookie on
+    // one hop and expects it back on the next one
     suspend fun followManually(url: String, referer: String?): NiceResponse? {
         var current = url
+        val jar = mutableMapOf<String, String>()
+        val seen = mutableSetOf<String>()
         repeat(15) {
+            if (!seen.add(current)) return null
             val res = try {
-                app.get(current, headers = headers(referer), allowRedirects = false, timeout = 15L)
+                app.get(
+                    current,
+                    headers = headers(referer),
+                    cookies = jar,
+                    allowRedirects = false,
+                    timeout = 15L
+                )
             } catch (e: Exception) {
                 return null
             }
+            jar.putAll(res.cookies)
             val loc = res.headers["location"]?.trim().orEmpty()
-            if (loc.isEmpty()) return res
+            if (loc.isEmpty()) return res.takeIf { it.code == 200 }
             current = absolute(loc, current)
+        }
+        return null
+    }
+
+    private fun driveMirror(url: String): String = when {
+        url.contains("nexdrive.fit") -> url.replace("nexdrive.fit", "mobilejsr.rest")
+        url.contains("mobilejsr.rest") -> url.replace("mobilejsr.rest", "nexdrive.fit")
+        else -> url
+    }
+
+    // a real cloudflare challenge answers with the cf-mitigated header or the
+    // interstitial body, a rate limit or an outage answers with neither and
+    // only the real challenge is worth a webview solve
+    private fun isCfChallenge(res: NiceResponse): Boolean {
+        if (res.headers["cf-mitigated"] == "challenge") return true
+        val body = try { res.text.lowercase() } catch (e: Exception) { "" }
+        return body.contains("just a moment") || body.contains("challenge-platform") ||
+            body.contains("checking your browser")
+    }
+
+    // the drive hosts sit behind cloudflare, a plain request either dies in a
+    // redirect loop or lands on a challenge page, the killer solves the
+    // challenge in a webview, the manual walk with cookies survives the loop
+    // and the mirror host is the last resort
+    suspend fun fetchDrivePage(url: String, referer: String?): NiceResponse? {
+        for (candidate in listOf(url, driveMirror(url))) {
+            val plain = try {
+                app.get(candidate, headers = headers(referer), timeout = 20L)
+            } catch (e: Exception) {
+                null
+            }
+            if (plain != null) {
+                if (plain.code == 200 && !isCfChallenge(plain)) return plain
+                if (isCfChallenge(plain)) {
+                    val solved = try {
+                        app.get(candidate, headers = headers(referer), interceptor = cfKiller, timeout = 20L)
+                    } catch (e: Exception) {
+                        null
+                    }
+                    if (solved != null && solved.code == 200 && !isCfChallenge(solved)) return solved
+                }
+            }
+            followManually(candidate, referer)?.let { return it }
         }
         return null
     }

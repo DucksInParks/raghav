@@ -30,7 +30,7 @@ class FastDlExtractor : ExtractorApi() {
             val html = app.get(url, headers = mapOf(
                 "User-Agent" to "Mozilla/5.0 (Linux; Android 11; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36",
                 "Referer" to "https://nexdrive.fit/"
-            )).text
+            ), timeout = 20L).text
 
             if (html.contains("File is Deleted") || html.contains("Something went wrong")) return
 
@@ -60,7 +60,7 @@ class FastDlExtractor : ExtractorApi() {
 
 class VCloudExtractor : ExtractorApi() {
     override val name = "V-Cloud"
-    override val mainUrl = "https://vcloud.zip"
+    override val mainUrl = "https://vcloud.fit"
     override val requiresReferer = true
 
     private val cfKiller = CloudflareKiller()
@@ -165,7 +165,11 @@ class GoFileExtractor : ExtractorApi() {
                 put("Authorization", "Bearer $token")
             }).text
 
-            val children = JSONObject(contentResp).getJSONObject("data").getJSONObject("children")
+            val children = JSONObject(contentResp).optJSONObject("data")?.optJSONObject("children")
+            if (children == null || children.length() == 0) {
+                Log.d(TAG, "GoFile: file is gone")
+                return
+            }
             val fileObj = children.getJSONObject(children.keys().next())
             val link = fileObj.getString("link")
             val fileName = fileObj.optString("name", "")

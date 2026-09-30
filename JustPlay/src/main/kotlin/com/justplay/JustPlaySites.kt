@@ -77,11 +77,8 @@ internal object DrivePages {
         try {
             // mobilejsr rest loops redirects for some visitors, nexdrive serves the same app
             val fetchUrl = driveUrl.replace("mobilejsr.rest", "nexdrive.fit")
-            val res = try {
-                app.get(fetchUrl, headers = PlayNet.headers(referer), timeout = 20L)
-            } catch (e: Exception) {
-                PlayNet.followManually(fetchUrl, referer) ?: throw e
-            }
+            val res = PlayNet.fetchDrivePage(fetchUrl, referer)
+                ?: throw Exception("drive page unreachable")
             val doc = res.document
             val driveHost = try {
                 URI(res.url).host?.lowercase()

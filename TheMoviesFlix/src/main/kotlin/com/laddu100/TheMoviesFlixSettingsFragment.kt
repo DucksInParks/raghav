@@ -1,7 +1,6 @@
 package com.laddu100
 
 import android.annotation.SuppressLint
-import android.content.Context
 import android.graphics.Color
 import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
@@ -15,12 +14,11 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import com.google.android.material.bottomsheet.BottomSheetDialogFragment
 import com.lagradost.api.Log
-import com.lagradost.cloudstream3.plugins.Plugin
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 
-class TheMoviesFlixSettingsFragment(private val plugin: Plugin) : BottomSheetDialogFragment() {
+class TheMoviesFlixSettingsFragment : BottomSheetDialogFragment() {
 
     private val TAG = "TMF_Settings"
 
@@ -59,11 +57,7 @@ class TheMoviesFlixSettingsFragment(private val plugin: Plugin) : BottomSheetDia
         root.addView(help)
 
         val bypassBtn = Button(ctx).apply {
-            text = if (TheMoviesFlixPlugin.cfCookies.isNotBlank()) {
-                "CF Cookies Saved - Refresh"
-            } else {
-                "Bypass Cloudflare"
-            }
+            text = "Bypass Cloudflare"
             background = makeButtonBackground(0xFF6D5ACF.toInt())
             setTextColor(Color.WHITE)
             setPadding(0, smallPad, 0, smallPad)
@@ -90,31 +84,16 @@ class TheMoviesFlixSettingsFragment(private val plugin: Plugin) : BottomSheetDia
         root.addView(saveBtn)
 
         bypassBtn.setOnClickListener {
-            val host = TheMoviesFlixPlugin.cfCookieHost.ifBlank { "https://moviesflixhq.com" }
-            val bypassUrl = "$host/?s=movie"
-            try {
-                val cm = android.webkit.CookieManager.getInstance()
-                listOf("cf_clearance", "cf_chl_rc_ni", "cf_chl_prog").forEach { name ->
-                    cm.setCookie(host, "$name=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT")
-                }
-                cm.flush()
-            } catch (e: Exception) {
-                Log.e(TAG, "CookieManager clear: ${e.message}")
-            }
-            TheMoviesFlixPlugin.cfCookies = ""
-            TheMoviesFlixPlugin.cfUserAgent = ""
-            TheMoviesFlixPlugin.cfCookieHost = ""
-            TMFCFStore.clear()
-
             bypassBtn.text = "Solving..."
             CoroutineScope(Dispatchers.Main).launch {
                 try {
-                    val success = showTMFCFBypassDialogAndWait(bypassUrl)
-                    bypassBtn.text = if (success && TheMoviesFlixPlugin.cfCookies.isNotBlank()) {
-                        "CF Cookies Saved - Refresh"
-                    } else {
-                        "Bypass Cloudflare"
-                    }
+                    val domain = FirebaseDomainHelper.getDomain("themoviesflix")
+                        ?: "https://moviesflixhq.com"
+                    val host = originOf(domain)
+                    clearWebviewCookies(host)
+                    TMFCFStore.clear(host)
+                    val success = showTMFCFBypassDialogAndWait("$host/?s=movie")
+                    bypassBtn.text = if (success) "CF Cookies Saved - Refresh" else "Bypass Cloudflare"
                     if (success) {
                         Toast.makeText(ctx, "CF cookies saved", Toast.LENGTH_SHORT).show()
                     } else {
@@ -133,22 +112,7 @@ class TheMoviesFlixSettingsFragment(private val plugin: Plugin) : BottomSheetDia
                 .setTitle("Clear CF Cookies?")
                 .setMessage("This will remove the saved Cloudflare cookies and User-Agent. You will need to bypass Cloudflare again before search works.")
                 .setPositiveButton("Clear") { _, _ ->
-                    val host = TheMoviesFlixPlugin.cfCookieHost
-                    if (host.isNotBlank()) {
-                        try {
-                            val cm = android.webkit.CookieManager.getInstance()
-                            listOf("cf_clearance", "cf_chl_rc_ni", "cf_chl_prog").forEach { name ->
-                                cm.setCookie(host, "$name=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT")
-                            }
-                            cm.flush()
-                        } catch (e: Exception) {
-                            Log.e(TAG, "CookieManager clear: ${e.message}")
-                        }
-                    }
-                    TheMoviesFlixPlugin.cfCookies = ""
-                    TheMoviesFlixPlugin.cfUserAgent = ""
-                    TheMoviesFlixPlugin.cfCookieHost = ""
-                    TMFCFStore.clear()
+                    TMFCFStore.clearAll()
                     bypassBtn.text = "Bypass Cloudflare"
                     Toast.makeText(ctx, "CF cookies cleared", Toast.LENGTH_SHORT).show()
                 }
@@ -162,6 +126,19 @@ class TheMoviesFlixSettingsFragment(private val plugin: Plugin) : BottomSheetDia
         }
 
         return root
+    }
+
+    private fun clearWebviewCookies(host: String) {
+        if (host.isBlank()) return
+        try {
+            val cm = android.webkit.CookieManager.getInstance()
+            listOf("cf_clearance", "cf_chl_rc_ni", "cf_chl_prog").forEach { name ->
+                cm.setCookie(host, "$name=; Max-Age=0; expires=Thu, 01 Jan 1970 00:00:00 GMT")
+            }
+            cm.flush()
+        } catch (e: Exception) {
+            Log.e(TAG, "CookieManager clear: ${e.message}")
+        }
     }
 
     private fun makeButtonBackground(color: Int): android.graphics.drawable.Drawable {

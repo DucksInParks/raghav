@@ -9,12 +9,16 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.withContext
+import org.jsoup.nodes.Document
 import org.jsoup.nodes.Element
 import java.net.URLEncoder
+import java.util.concurrent.ConcurrentHashMap
 import com.raghav.donation.DonationManager
 
 private const val TAG = "TMF"
+
+private const val DRIVE_REFERER = "https://nexdrive.fit/"
+private const val DRIVE_CACHE_MS = 5 * 60 * 1000L
 
 class TheMoviesFlix : MainAPI() {
     override var mainUrl = "https://moviesflixhq.com"
@@ -167,16 +171,25 @@ class TheMoviesFlix : MainAPI() {
             for ((seasonNum, groups) in seasonGroups) {
                 if (groups.isEmpty()) continue
                 val allNexdriveUrls = groups.joinToString("|") { it.redirectUrl }
-                val episodeLinks = resolveNexdriveEpisodes(groups.first().redirectUrl)
 
-                if (episodeLinks.isEmpty()) {
+                // every quality group lists the same episodes, the union of
+                // all drive pages is the safest episode count
+                val episodeNums = coroutineScope {
+                    groups.map { group ->
+                        async(Dispatchers.IO) {
+                            fetchDrivePage(group.redirectUrl)?.episodes?.keys ?: emptySet()
+                        }
+                    }.awaitAll()
+                }.flatten().toSortedSet()
+
+                if (episodeNums.isEmpty()) {
                     episodes.add(newEpisode("$allNexdriveUrls|$seasonNum|1") {
                         this.name = groups.first().label
                         this.episode = 1
                         this.season = seasonNum
                     })
                 } else {
-                    for ((epNum, _) in episodeLinks) {
+                    for (epNum in episodeNums) {
                         episodes.add(newEpisode("$allNexdriveUrls|$seasonNum|$epNum") {
                             this.name = "Episode $epNum"
                             this.episode = epNum
@@ -225,106 +238,117 @@ class TheMoviesFlix : MainAPI() {
 
     private fun isInternalLink(href: String): Boolean = internalDomains.any { href.contains(it) }
 
-    private suspend fun resolveNexdriveEpisodes(url: String): List<Pair<Int, List<String>>> {
-        return try {
-            val fixedUrl = url.replace("mobilejsr.rest", "nexdrive.fit")
-            val doc = app.get(fixedUrl, headers = baseHeaders + ("Referer" to "$mainUrl/")).document
-            val article = doc.selectFirst("article") ?: return emptyList()
+    private class DrivePage(
+        val quality: Int?,
+        val info: String,
+        val links: List<String>,
+        val episodes: Map<Int, List<String>>
+    )
 
-            val episodes: MutableList<Pair<Int, List<String>>> = mutableListOf()
-            for (h4 in article.select("h4")) {
-                val text = h4.text().trim()
-                if (!text.contains("Episode", true)) continue
+    private class CachedDrivePage(val savedAt: Long, val page: DrivePage)
 
-                val epNum = Regex("""Episode[s]?\s*:\s*0*(\d+)""", RegexOption.IGNORE_CASE)
-                    .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: continue
+    private val driveCache = ConcurrentHashMap<String, CachedDrivePage>()
 
-                val links = mutableListOf<String>()
-                var sibling = h4.nextElementSibling()
-                var attempts = 0
-                while (sibling != null && attempts < 3) {
-                    for (a in sibling.select("a[href]")) {
-                        val href = a.attr("href").trim()
-                        if (href.isNotBlank() && href.startsWith("http") && !isInternalLink(href)) {
-                            links.add(href)
-                        }
+    private fun qualityOf(text: String): Int? =
+        Regex("""(\d{3,4})[pP]""").find(text)?.groupValues?.get(1)?.toIntOrNull()
+            ?: if (text.contains("4K", true) || text.contains("UHD", true)) 2160 else null
+
+    private fun infoOf(title: String): String =
+        Regex("""\[([^\]]+)\]""").findAll(title)
+            .map { it.groupValues[1].trim() }
+            .filter { it.isNotBlank() }
+            .joinToString(" · ")
+
+    private fun parseDrivePage(doc: Document): DrivePage {
+        val title = doc.selectFirst("h1")?.text()?.trim()
+            ?: doc.title().substringBefore(" – ").substringBefore(" - ").trim()
+        val root = doc.selectFirst("article") ?: doc.selectFirst("div.entry-content")
+            ?: return DrivePage(qualityOf(title), infoOf(title), emptyList(), emptyMap())
+
+        val links = root.select("a[href]").mapNotNull { a ->
+            val href = a.attr("href").trim()
+            if (href.startsWith("http") && !isInternalLink(href)) href else null
+        }.distinct()
+
+        val episodes = mutableMapOf<Int, List<String>>()
+        for (h4 in root.select("h4")) {
+            val text = h4.text().trim()
+            if (!text.contains("Episode", true)) continue
+
+            val epNum = Regex("""Episode[s]?\s*:\s*0*(\d+)""", RegexOption.IGNORE_CASE)
+                .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: continue
+
+            val epLinks = mutableListOf<String>()
+            var sibling = h4.nextElementSibling()
+            var attempts = 0
+            while (sibling != null && attempts < 3) {
+                for (a in sibling.select("a[href]")) {
+                    val href = a.attr("href").trim()
+                    if (href.isNotBlank() && href.startsWith("http") && !isInternalLink(href)) {
+                        epLinks.add(href)
                     }
-                    if (links.isNotEmpty()) break
-                    sibling = sibling.nextElementSibling()
-                    attempts++
                 }
-
-                if (links.isNotEmpty()) {
-                    episodes.add(Pair(epNum, links))
-                }
+                if (epLinks.isNotEmpty()) break
+                sibling = sibling.nextElementSibling()
+                attempts++
             }
-            episodes
-        } catch (e: Exception) {
-            Log.e(TAG, "resolveNexdriveEpisodes: ${e.message}")
-            emptyList()
+
+            if (epLinks.isNotEmpty()) {
+                episodes[epNum] = epLinks.distinct()
+            }
         }
+
+        return DrivePage(qualityOf(title), infoOf(title), links, episodes)
     }
 
-    private suspend fun resolveRedirectPage(url: String): List<String> {
-        val fixedUrl = url.replace("mobilejsr.rest", "nexdrive.fit")
-        return try {
-            val doc = app.get(fixedUrl, headers = baseHeaders + ("Referer" to "$mainUrl/")).document
-            val article = doc.selectFirst("article") ?: doc.selectFirst("div.entry-content") ?: return emptyList()
-
-            val links = mutableSetOf<String>()
-            for (a in article.select("a[href]")) {
-                val href = a.attr("href").trim()
-                if (href.isBlank() || !href.startsWith("http") || isInternalLink(href)) continue
-                links.add(href)
-            }
-            links.toList()
-        } catch (e: Exception) {
-            Log.e(TAG, "resolveRedirectPage: ${e.message}")
-            emptyList()
+    private suspend fun fetchDrivePage(url: String): DrivePage? {
+        val key = url.replace("mobilejsr.rest", "nexdrive.fit")
+        driveCache[key]?.let { cached ->
+            if (System.currentTimeMillis() - cached.savedAt < DRIVE_CACHE_MS) return cached.page
+            driveCache.remove(key)
         }
+        val res = tmfDriveGet(key, "$mainUrl/") ?: return null
+        val page = parseDrivePage(res.document)
+        driveCache[key] = CachedDrivePage(System.currentTimeMillis(), page)
+        return page
     }
 
-    private suspend fun resolveNexdriveEpisodeLinks(url: String, episodeNum: Int): List<String> {
-        val fixedUrl = url.replace("mobilejsr.rest", "nexdrive.fit")
-        return try {
-            val doc = app.get(fixedUrl, headers = baseHeaders + ("Referer" to "$mainUrl/")).document
-            val article = doc.selectFirst("article") ?: return emptyList()
+    private suspend fun loadFromDrive(
+        driveUrl: String,
+        episodeNum: Int?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ): Boolean {
+        val page = fetchDrivePage(driveUrl) ?: return false
+        val links = if (episodeNum != null) page.episodes[episodeNum] ?: page.links else page.links
 
-            for (h4 in article.select("h4")) {
-                val text = h4.text().trim()
-                if (!text.contains("Episode", true)) continue
-                val epNum = Regex("""Episode[s]?\s*:\s*0*(\d+)""", RegexOption.IGNORE_CASE)
-                    .find(text)?.groupValues?.get(1)?.toIntOrNull() ?: continue
-                if (epNum != episodeNum) continue
-
-                val links = mutableListOf<String>()
-                var sibling = h4.nextElementSibling()
-                var attempts = 0
-                while (sibling != null && attempts < 3) {
-                    for (a in sibling.select("a[href]")) {
-                        val href = a.attr("href").trim()
-                        if (href.isNotBlank() && href.startsWith("http") && !isInternalLink(href)) {
-                            links.add(href)
+        return coroutineScope {
+            links.map { link ->
+                async(Dispatchers.IO) {
+                    try {
+                        loadExtractor(link, DRIVE_REFERER, subtitleCallback) { extracted ->
+                            val quality = extracted.quality.takeIf { it != Qualities.Unknown.value }
+                                ?: page.quality ?: Qualities.Unknown.value
+                            val name = if (page.info.isBlank()) extracted.name
+                                else "${extracted.name} · ${page.info}"
+                            val relabeled = ExtractorLink(
+                                source = extracted.source,
+                                name = name,
+                                url = extracted.url,
+                                referer = extracted.referer,
+                                quality = quality,
+                                type = extracted.type,
+                                headers = extracted.headers
+                            )
+                            relabeled.extractorData = extracted.extractorData
+                            callback(relabeled)
                         }
+                    } catch (e: Exception) {
+                        Log.e(TAG, "extractor: ${e.message}")
+                        false
                     }
-                    if (links.isNotEmpty()) break
-                    sibling = sibling.nextElementSibling()
-                    attempts++
                 }
-                return links
-            }
-
-            val allLinks = mutableListOf<String>()
-            for (a in article.select("a[href]")) {
-                val href = a.attr("href").trim()
-                if (href.isNotBlank() && href.startsWith("http") && !isInternalLink(href)) {
-                    allLinks.add(href)
-                }
-            }
-            allLinks
-        } catch (e: Exception) {
-            Log.e(TAG, "resolveNexdriveEpisodeLinks: ${e.message}")
-            emptyList()
+            }.awaitAll().any { it }
         }
     }
 
@@ -341,57 +365,29 @@ class TheMoviesFlix : MainAPI() {
             parts[parts.size - 2].toIntOrNull() != null &&
             parts[parts.size - 1].toIntOrNull() != null
 
-        val allLinks = mutableListOf<String>()
-
+        val episodeNum: Int?
+        val driveUrls: List<String>
         if (isTvEpisode) {
-            val episodeNum = parts.last().toInt()
-            val nexdriveUrls = parts.dropLast(2).filter { it.isNotBlank() }
-            for (nexdriveUrl in nexdriveUrls) {
-                try {
-                    allLinks.addAll(resolveNexdriveEpisodeLinks(nexdriveUrl, episodeNum))
-                } catch (e: Exception) {
-                    Log.e(TAG, "loadLinks TV: ${e.message}")
-                }
-            }
+            episodeNum = parts.last().toInt()
+            driveUrls = parts.dropLast(2).filter { it.isNotBlank() }
         } else {
-            val redirectUrls = data.split("\n").map { it.trim() }.filter { it.isNotBlank() }
-            for (redirectUrl in redirectUrls) {
-                try {
-                    allLinks.addAll(resolveRedirectPage(redirectUrl))
-                } catch (e: Exception) {
-                    Log.e(TAG, "loadLinks: ${e.message}")
-                }
-            }
+            episodeNum = null
+            driveUrls = data.split("\n").map { it.trim() }.filter { it.isNotBlank() }
         }
+        if (driveUrls.isEmpty()) return false
 
-        if (allLinks.isEmpty()) return false
-
-        var foundAny = false
-        try {
-            coroutineScope {
-                val results = allLinks.mapIndexed { _, link ->
-                    async(Dispatchers.IO) {
-                        try {
-                            withContext(kotlinx.coroutines.NonCancellable) {
-                                try {
-                                    loadExtractor(link, "https://nexdrive.fit/", subtitleCallback, callback)
-                                } catch (e: Exception) {
-                                    Log.e(TAG, "extractor: ${e.message}")
-                                    false
-                                }
-                            }
-                        } catch (e: Exception) {
-                            false
-                        }
+        return coroutineScope {
+            driveUrls.map { driveUrl ->
+                async(Dispatchers.IO) {
+                    try {
+                        loadFromDrive(driveUrl, episodeNum, subtitleCallback, callback)
+                    } catch (e: Exception) {
+                        Log.e(TAG, "loadLinks: ${e.message}")
+                        false
                     }
-                }.awaitAll()
-                foundAny = results.any { it }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "loadLinks: ${e.message}")
+                }
+            }.awaitAll().any { it }
         }
-
-        return foundAny
     }
 
     private fun extractYear(entry: Element): Int? =

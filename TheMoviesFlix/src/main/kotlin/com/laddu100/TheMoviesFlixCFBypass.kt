@@ -3,6 +3,7 @@ package com.laddu100
 import android.annotation.SuppressLint
 import android.app.Dialog
 import android.content.Context
+import android.content.SharedPreferences
 import android.graphics.Color
 import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
@@ -37,9 +38,13 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.coroutines.resume
 
 private const val TAG = "TMF_CF"
+
+private const val MOBILE_UA =
+    "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
 private val CF_CHALLENGE_TITLES = listOf(
     "just a moment", "just a moment...", "checking your browser",
@@ -50,85 +55,52 @@ private const val COOKIE_TTL_MS = 15L * 60 * 60 * 1000
 private const val SOLVER_TIMEOUT_MS = 120_000L
 private const val POLL_INTERVAL_MS = 1000L
 private const val CURSOR_STEP_DP = 10f
+private const val SOLVE_COOLDOWN_MS = 10 * 60 * 1000L
+private const val FRESH_COOKIE_MS = 60_000L
 
 internal object TMFCFStore {
     private const val PREFS_NAME = "TMFCFBypass"
-    private const val KEY_COOKIES = "cf_cookies"
-    private const val KEY_UA = "cf_user_agent"
-    private const val KEY_HOST = "cf_cookie_host"
-    private const val KEY_TIMESTAMP = "cf_timestamp"
 
-    private var prefs: android.content.SharedPreferences? = null
-    @Volatile private var cachedCookies: String? = null
-    @Volatile private var cachedUA: String? = null
-    @Volatile private var cachedHost: String? = null
-    @Volatile private var cachedTimestamp: Long = 0L
+    class SavedCookies(val cookies: String, val userAgent: String, val savedAt: Long)
+
+    private var prefs: SharedPreferences? = null
 
     fun init(context: Context) {
         if (prefs == null) {
             prefs = context.applicationContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            cachedCookies = prefs?.getString(KEY_COOKIES, null)
-            cachedUA = prefs?.getString(KEY_UA, null)
-            cachedHost = prefs?.getString(KEY_HOST, null)
-            cachedTimestamp = prefs?.getLong(KEY_TIMESTAMP, 0L) ?: 0L
-            if (cachedCookies.isNullOrBlank()) {
-                val persisted = TheMoviesFlixPlugin.cfCookies
-                val persistedUa = TheMoviesFlixPlugin.cfUserAgent
-                val persistedHost = TheMoviesFlixPlugin.cfCookieHost
-                if (persisted.isNotBlank()) {
-                    cachedCookies = persisted
-                    cachedUA = persistedUa
-                    cachedHost = persistedHost
-                    cachedTimestamp = System.currentTimeMillis()
-                    prefs?.edit()?.apply {
-                        putString(KEY_COOKIES, persisted)
-                        putString(KEY_UA, persistedUa)
-                        putString(KEY_HOST, persistedHost)
-                        putLong(KEY_TIMESTAMP, cachedTimestamp)
-                    }?.apply()
-                }
-            }
         }
     }
 
-    fun getCookies(): String? {
-        val cookies = cachedCookies
-        if (cookies.isNullOrBlank()) return null
-        if (System.currentTimeMillis() - cachedTimestamp > COOKIE_TTL_MS) {
-            clear()
+    fun save(host: String, cookies: String, userAgent: String) {
+        prefs?.edit()?.apply {
+            putString("cf_cookies_$host", cookies)
+            putString("cf_ua_$host", userAgent)
+            putLong("cf_time_$host", System.currentTimeMillis())
+        }?.apply()
+    }
+
+    fun cookiesFor(host: String): SavedCookies? {
+        val p = prefs ?: return null
+        val cookies = p.getString("cf_cookies_$host", null) ?: return null
+        val ua = p.getString("cf_ua_$host", null) ?: return null
+        val savedAt = p.getLong("cf_time_$host", 0L)
+        if (System.currentTimeMillis() - savedAt > COOKIE_TTL_MS) {
+            clear(host)
             return null
         }
-        return cookies
+        return SavedCookies(cookies, ua, savedAt)
     }
 
-    fun getUserAgent(): String? = cachedUA?.takeIf { it.isNotBlank() }
-    fun getHost(): String? = cachedHost?.takeIf { it.isNotBlank() }
-
-    fun save(cookies: String, userAgent: String, host: String) {
-        cachedCookies = cookies
-        cachedUA = userAgent
-        cachedHost = host
-        cachedTimestamp = System.currentTimeMillis()
+    fun clear(host: String) {
         prefs?.edit()?.apply {
-            putString(KEY_COOKIES, cookies)
-            putString(KEY_UA, userAgent)
-            putString(KEY_HOST, host)
-            putLong(KEY_TIMESTAMP, cachedTimestamp)
+            remove("cf_cookies_$host")
+            remove("cf_ua_$host")
+            remove("cf_time_$host")
         }?.apply()
-        TheMoviesFlixPlugin.cfCookies = cookies
-        TheMoviesFlixPlugin.cfUserAgent = userAgent
-        TheMoviesFlixPlugin.cfCookieHost = host
     }
 
-    fun clear() {
-        cachedCookies = null
-        cachedUA = null
-        cachedHost = null
-        cachedTimestamp = 0L
+    fun clearAll() {
         prefs?.edit()?.clear()?.apply()
-        TheMoviesFlixPlugin.cfCookies = ""
-        TheMoviesFlixPlugin.cfUserAgent = ""
-        TheMoviesFlixPlugin.cfCookieHost = ""
     }
 }
 
@@ -156,7 +128,32 @@ private fun isChallengeTitle(title: String): Boolean {
     return CF_CHALLENGE_TITLES.any { lower.contains(it) }
 }
 
+internal fun originOf(url: String): String = try {
+    val uri = Uri.parse(url)
+    "${uri.scheme}://${uri.host}"
+} catch (e: Exception) {
+    url
+}
+
+private fun parseCookieHeader(header: String): MutableMap<String, String> {
+    val jar = mutableMapOf<String, String>()
+    for (part in header.split(";")) {
+        val idx = part.indexOf('=')
+        if (idx > 0) {
+            val name = part.substring(0, idx).trim()
+            val value = part.substring(idx + 1).trim()
+            if (name.isNotEmpty()) jar[name] = value
+        }
+    }
+    return jar
+}
+
+private fun buildCookieHeader(jar: Map<String, String>): String =
+    jar.entries.joinToString("; ") { "${it.key}=${it.value}" }
+
 private val cfBypassMutex = Mutex()
+
+private val driveSolveAt = ConcurrentHashMap<String, Long>()
 
 private class CursorPosHolder { var x: Float = 0f; var y: Float = 0f }
 
@@ -174,15 +171,7 @@ private class TMFCFDialog(
     private val resolved = java.util.concurrent.atomic.AtomicBoolean(false)
     private var pollElapsedMs = 0L
 
-    private val targetHost: String by lazy {
-        try {
-            val uri = Uri.parse(targetUrl)
-            "${uri.scheme}://${uri.host}"
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to parse target host: ${e.message}")
-            targetUrl
-        }
-    }
+    private val targetHost: String by lazy { originOf(targetUrl) }
 
     private fun extractAndFinish() {
         if (resolved.get()) return
@@ -202,7 +191,7 @@ private class TMFCFDialog(
         if (!resolved.compareAndSet(false, true)) return
         handler.removeCallbacksAndMessages(null)
         val ua = webView?.settings?.userAgentString ?: ""
-        TMFCFStore.save(cookieStr, ua, targetHost)
+        TMFCFStore.save(targetHost, cookieStr, ua)
         try { webView?.destroy() } catch (e: Exception) { Log.e(TAG, "destroy: ${e.message}") }
         try { (webView?.getTag() as? Dialog)?.dismiss() } catch (e: Exception) {}
         try { onFinished?.invoke(true) } catch (e: Exception) { Log.e(TAG, "onFinished: ${e.message}") }
@@ -463,7 +452,7 @@ private class TMFCFDialog(
                 allowContentAccess = true
                 allowFileAccess = true
                 loadsImagesAutomatically = true
-                userAgentString = "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
+                userAgentString = MOBILE_UA
                 mediaPlaybackRequiresUserGesture = false
             }
             webChromeClient = object : WebChromeClient() {
@@ -477,7 +466,6 @@ private class TMFCFDialog(
                 override fun onPageFinished(view: WebView?, url: String?) {
                     if (resolved.get()) return
                     val title = view?.title ?: ""
-                    Log.d(TAG, "onPageFinished title='$title' url=$url")
 
                     if (isChallengeTitle(title)) {
                         statusText?.text = "Challenge active - solve the CAPTCHA above"
@@ -490,8 +478,7 @@ private class TMFCFDialog(
 
                     url?.let {
                         try {
-                            val uri = Uri.parse(it)
-                            val altHost = "${uri.scheme}://${uri.host}"
+                            val altHost = originOf(it)
                             if (altHost != targetHost) {
                                 val altCookies = CookieManager.getInstance().getCookie(altHost) ?: ""
                                 if (altCookies.contains("cf_clearance")) {
@@ -499,7 +486,7 @@ private class TMFCFDialog(
                                         resolved.set(true)
                                         handler.removeCallbacksAndMessages(null)
                                         val ua = webView?.settings?.userAgentString ?: ""
-                                        TMFCFStore.save(altCookies, ua, altHost)
+                                        TMFCFStore.save(altHost, altCookies, ua)
                                         try { webView?.destroy() } catch (e: Exception) {}
                                         try { dialog?.dismiss() } catch (e: Exception) {}
                                         try { onFinished?.invoke(true) } catch (e: Exception) {}
@@ -548,13 +535,7 @@ suspend fun tmfGet(
     url: String,
     headers: Map<String, String> = emptyMap()
 ): NiceResponse {
-    val targetHost = try {
-        val uri = Uri.parse(url)
-        "${uri.scheme}://${uri.host}"
-    } catch (e: Exception) {
-        Log.e(TAG, "URL parse failed: ${e.message}")
-        url
-    }
+    val targetHost = originOf(url)
 
     fun buildCfHeaders(): Map<String, String> {
         val h = headers.toMutableMap()
@@ -566,21 +547,17 @@ suspend fun tmfGet(
         }
         h["sec-ch-ua-mobile"] = "?1"
         h["sec-ch-ua-platform"] = "\"Android\""
-        TMFCFStore.getCookies()?.let { cookies ->
-            h["Cookie"] = cookies
+        val saved = TMFCFStore.cookiesFor(targetHost)
+        if (saved != null) {
+            h["Cookie"] = saved.cookies
+            if (saved.userAgent.isNotBlank()) h["User-Agent"] = saved.userAgent
         }
-        TMFCFStore.getUserAgent()?.let { ua ->
-            h["User-Agent"] = ua
-        } ?: run {
-            if (!h.containsKey("User-Agent")) {
-                h["User-Agent"] = "Mozilla/5.0 (Linux; Android 13; Pixel 5) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
-            }
-        }
+        if (!h.containsKey("User-Agent")) h["User-Agent"] = MOBILE_UA
         return h
     }
 
     var response = try {
-        app.get(url, headers = buildCfHeaders(), timeout = 30_000L)
+        app.get(url, headers = buildCfHeaders(), timeout = 30L)
     } catch (e: Exception) {
         Log.e(TAG, "First request failed: ${e.message}")
         throw e
@@ -591,21 +568,17 @@ suspend fun tmfGet(
     Log.e(TAG, "Cloudflare blocked (HTTP ${response.code}) - triggering bypass")
 
     cfBypassMutex.withLock {
-        val cachedCookies = TMFCFStore.getCookies()
-        if (cachedCookies != null) {
+        if (TMFCFStore.cookiesFor(targetHost) != null) {
             response = try {
-                app.get(url, headers = buildCfHeaders(), timeout = 30_000L)
+                app.get(url, headers = buildCfHeaders(), timeout = 30L)
             } catch (e: Exception) {
                 Log.e(TAG, "Retry with cached cookies failed: ${e.message}")
                 throw e
             }
-            if (!isCloudflareBlocked(response)) {
-                Log.d(TAG, "Succeeded with cookies from another coroutine")
-                return response
-            }
+            if (!isCloudflareBlocked(response)) return response
         }
 
-        TMFCFStore.clear()
+        TMFCFStore.clear(targetHost)
         val bypassSuccess = showTMFCFBypassDialogAndWait(url)
 
         if (!bypassSuccess) {
@@ -615,20 +588,122 @@ suspend fun tmfGet(
 
         for (attempt in 1..2) {
             response = try {
-                app.get(url, headers = buildCfHeaders(), timeout = 30_000L)
+                app.get(url, headers = buildCfHeaders(), timeout = 30L)
             } catch (e: Exception) {
                 Log.e(TAG, "Retry $attempt failed: ${e.message}")
                 throw e
             }
             if (!isCloudflareBlocked(response)) {
                 Log.d(TAG, "Request succeeded after CF bypass (attempt $attempt)")
-                return@withLock
+                return response
             }
             Log.e(TAG, "Still CF-blocked after retry $attempt")
         }
     }
 
     return response
+}
+
+private fun swapDriveHost(url: String): String = when {
+    url.contains("nexdrive.fit") -> url.replace("nexdrive.fit", "mobilejsr.rest")
+    url.contains("mobilejsr.rest") -> url.replace("mobilejsr.rest", "nexdrive.fit")
+    else -> url
+}
+
+private class DriveResult(val response: NiceResponse?, val challenged: Boolean)
+
+// the drive pages sit behind cloudflare, okhttp either dies in a redirect
+// loop or lands on a challenge page, walking the location headers by hand
+// with a cookie jar survives both, the clearance cookie cloudflare hands out
+// on one hop has to come back on the next one, a 503 is only a rate limit
+// and no captcha in the world fixes that
+private suspend fun driveFetchOnce(url: String, referer: String): DriveResult {
+    val host = originOf(url)
+    val saved = TMFCFStore.cookiesFor(host)
+    val ua = saved?.userAgent?.takeIf { it.isNotBlank() } ?: MOBILE_UA
+    val jar = saved?.let { parseCookieHeader(it.cookies) } ?: mutableMapOf()
+
+    var current = url
+    val seen = mutableSetOf<String>()
+    repeat(12) {
+        if (!seen.add(current)) {
+            TMFCFStore.clear(host)
+            return DriveResult(null, true)
+        }
+        val res = try {
+            app.get(
+                current,
+                headers = mapOf(
+                    "User-Agent" to ua,
+                    "Accept" to "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                    "Accept-Language" to "en-US,en;q=0.9",
+                    "Referer" to referer
+                ),
+                cookies = jar,
+                allowRedirects = false,
+                timeout = 20L
+            )
+        } catch (e: Exception) {
+            return DriveResult(null, false)
+        }
+        jar.putAll(res.cookies)
+        val loc = res.headers["location"]?.trim().orEmpty()
+        if (loc.isEmpty()) {
+            if (res.code == 503) return DriveResult(null, false)
+            if (res.code != 200) return DriveResult(null, res.code == 403 || res.code == 429)
+            if (isCloudflareBlocked(res)) {
+                TMFCFStore.clear(host)
+                return DriveResult(null, true)
+            }
+            if (saved == null && jar.isNotEmpty()) {
+                TMFCFStore.save(host, buildCookieHeader(jar), ua)
+            }
+            return DriveResult(res, false)
+        }
+        current = when {
+            loc.startsWith("http") -> loc
+            loc.startsWith("/") -> originOf(current) + loc
+            else -> current.trimEnd('/') + "/" + loc
+        }
+    }
+    return DriveResult(null, true)
+}
+
+// nexdrive and mobilejsr serve the same drive app, when one host has a bad
+// day the other usually still answers
+suspend fun tmfDriveGet(url: String, referer: String): NiceResponse? {
+    val primary = url.replace("mobilejsr.rest", "nexdrive.fit")
+    val mirror = swapDriveHost(primary)
+    val host = originOf(primary)
+
+    val first = driveFetchOnce(primary, referer)
+    if (first.response != null) return first.response
+    val second = driveFetchOnce(mirror, referer)
+    if (second.response != null) return second.response
+
+    // only a real cloudflare challenge is worth a captcha, a rate limited
+    // or dead drive host fails quietly
+    if (!first.challenged && !second.challenged) return null
+
+    val now = System.currentTimeMillis()
+    return cfBypassMutex.withLock {
+        val saved = TMFCFStore.cookiesFor(host)
+        when {
+            saved != null && now - saved.savedAt < FRESH_COOKIE_MS -> {
+                driveFetchOnce(primary, referer).response
+            }
+            now - (driveSolveAt[host] ?: 0L) < SOLVE_COOLDOWN_MS -> {
+                null
+            }
+            else -> {
+                TMFCFStore.clear(host)
+                val solved = showTMFCFBypassDialogAndWait(primary)
+                val res = if (solved) driveFetchOnce(primary, referer).response else null
+                if (res == null) driveSolveAt[host] = now
+                res
+            }
+        }
+    }
 }
 
 fun initTMFCFBypass(context: Context) {
