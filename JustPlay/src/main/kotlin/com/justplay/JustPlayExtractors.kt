@@ -316,6 +316,21 @@ class PlayHubCloud : ExtractorApi() {
                 "google\\.com/search|hubcloud\\.fans|drive/admin"
         )
 
+        private val pxlRegex = Regex("""var\s+pxl\s*=\s*[\"']([^\"']+)[\"']""")
+
+        // the pixel button href is a dead placeholder that stays the same for
+        // every file, the real pixeldrain link sits in the pxl variable of the
+        // same page
+        private fun pixelFileUrl(pageHtml: String, buttonHref: String): String? {
+            val pxl = pxlRegex.find(pageHtml)?.groupValues?.get(1)
+            val link = pxl?.takeIf { it.startsWith("http") } ?: buttonHref
+            if (!link.startsWith("http")) return null
+            if (link.contains("download", true)) return link
+            val id = link.substringBefore("?").substringBefore("#").substringAfterLast("/")
+            if (id.isBlank()) return null
+            return "${PlayNet.getBaseUrl(link)}/api/file/$id?download"
+        }
+
         // the drive page only carries a generate button now, the real servers
         // sit behind it and need the second request
         suspend fun emitHubServers(
@@ -430,9 +445,7 @@ class PlayHubCloud : ExtractorApi() {
                         }
                     }
                     label.contains("pixeldra") || label.contains("pixelserver") || label.contains("pixel server") || link.contains("pixeldra") -> {
-                        val pixelBase = PlayNet.getBaseUrl(link)
-                        val final = if (link.contains("download", true)) link
-                        else "$pixelBase/api/file/${link.substringAfterLast("/")}?download"
+                        val final = pixelFileUrl(doc.toString(), link) ?: continue
                         callback(newExtractorLink("Hub-Cloud", "Pixeldrain [$labelExtras]", final, ExtractorLinkType.VIDEO) { this.quality = quality })
                         emitted = true
                     }
@@ -481,8 +494,7 @@ class PlayHubCloud : ExtractorApi() {
                         emitted = true
                     }
                     text.contains("pixelserver") || text.contains("pixeldra") || href.contains("pixeldrain") -> {
-                        val final = if (href.contains("download", true)) href
-                        else "https://pixeldrain.dev/api/file/${href.substringAfterLast("/u/")}?download"
+                        val final = pixelFileUrl(doc.toString(), href) ?: continue
                         callback(newExtractorLink("Hub-Cloud", "Pixeldrain [$labelExtras]", final, ExtractorLinkType.VIDEO) { this.quality = quality })
                         emitted = true
                     }
@@ -549,12 +561,9 @@ class PlayVCloud : ExtractorApi() {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val res = app.get(
-                url,
-                headers = PlayNet.headers(referer),
-                interceptor = PlayNet.cfKiller,
-                timeout = 20L
-            )
+            // vcloud sits behind a cloudflare wall, a solve can easily outrun a
+            // short timeout and every hub server behind it dies with it
+            val res = PlayNet.fetchWithCf(url, referer, timeout = 30L) ?: return
             val doc = res.document
             val base = PlayNet.getBaseUrl(res.url)
             var link: String? = null
@@ -569,12 +578,7 @@ class PlayVCloud : ExtractorApi() {
             }
             if (link.isNullOrBlank()) return
             val abs = if (link.startsWith("http")) link else base + link
-            val targetDoc = try {
-                app.get(abs, headers = PlayNet.headers(base), timeout = 20L).document
-            } catch (e: Exception) {
-                Log.d(PlayNet.TAG, "vcloud target: ${e.message}")
-                return
-            }
+            val targetDoc = PlayNet.fetchWithCf(abs, base)?.document ?: return
             PlayHubCloud.emitHubServers(targetDoc, PlayNet.getBaseUrl(abs), abs, subtitleCallback, callback)
         } catch (e: Exception) {
             Log.d(PlayNet.TAG, "vcloud: ${e.message}")

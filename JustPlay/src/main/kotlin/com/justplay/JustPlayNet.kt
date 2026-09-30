@@ -172,28 +172,39 @@ internal object PlayNet {
             body.contains("checking your browser")
     }
 
+    // the killer keeps its cookies per host and never re-solves once it has
+    // some, dropping them for this host is what forces a fresh webview pass
+    // when the saved ones went stale
+    suspend fun fetchWithCf(
+        url: String,
+        referer: String? = null,
+        timeout: Long = 20L,
+        solveTimeout: Long = 60L
+    ): NiceResponse? {
+        val plain = try {
+            app.get(url, headers = headers(referer), timeout = timeout)
+        } catch (e: Exception) {
+            null
+        }
+        if (plain != null && plain.code == 200 && !isCfChallenge(plain)) return plain
+
+        runCatching { cfKiller.savedCookies.remove(URI(url).host) }
+        val solved = try {
+            app.get(url, headers = headers(referer), interceptor = cfKiller, timeout = solveTimeout)
+        } catch (e: Exception) {
+            null
+        }
+        if (solved != null && solved.code == 200 && !isCfChallenge(solved)) return solved
+        return null
+    }
+
     // the drive hosts sit behind cloudflare, a plain request either dies in a
     // redirect loop or lands on a challenge page, the killer solves the
     // challenge in a webview, the manual walk with cookies survives the loop
     // and the mirror host is the last resort
     suspend fun fetchDrivePage(url: String, referer: String?): NiceResponse? {
         for (candidate in listOf(url, driveMirror(url))) {
-            val plain = try {
-                app.get(candidate, headers = headers(referer), timeout = 20L)
-            } catch (e: Exception) {
-                null
-            }
-            if (plain != null) {
-                if (plain.code == 200 && !isCfChallenge(plain)) return plain
-                if (isCfChallenge(plain)) {
-                    val solved = try {
-                        app.get(candidate, headers = headers(referer), interceptor = cfKiller, timeout = 20L)
-                    } catch (e: Exception) {
-                        null
-                    }
-                    if (solved != null && solved.code == 200 && !isCfChallenge(solved)) return solved
-                }
-            }
+            fetchWithCf(candidate, referer)?.let { return it }
             followManually(candidate, referer)?.let { return it }
         }
         return null

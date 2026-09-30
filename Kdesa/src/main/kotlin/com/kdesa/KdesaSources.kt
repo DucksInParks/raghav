@@ -173,7 +173,6 @@ class KdesaSources {
         if (info.audioLangs.isNotEmpty()) {
             val name = label + audioSuffix(info.audioLangs)
             val q = if (info.maxHeight > 0) info.maxHeight else Qualities.Unknown.value
-            Log.d(TAG, "emitHls '$label' -> unsplit master audio=[${info.audioLangs.joinToString(",")}] max=${info.maxHeight}p variants=${info.variants}")
             callback.invoke(
                 newExtractorLink(label, name, url, ExtractorLinkType.M3U8) {
                     this.referer = referer
@@ -199,7 +198,6 @@ class KdesaSources {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d(TAG, "resolveMovie tmdbId=$tmdbId title='$title'")
         var any = false
         any = sourceCornClick(tmdbId, null, null, subtitleCallback, callback) || any
         any = sourceSevenMovies(tmdbId, null, null, subtitleCallback, callback) || any
@@ -210,7 +208,6 @@ class KdesaSources {
         any = sourceCuevana3(tmdbId, title, null, null, subtitleCallback, callback) || any
         any = sourceNova(tmdbId, null, null, subtitleCallback, callback) || any
         any = sourceFsonline(tmdbId, title, null, null, subtitleCallback, callback) || any
-        Log.d(TAG, "resolveMovie done any=$any")
         return any
     }
 
@@ -222,7 +219,6 @@ class KdesaSources {
         subtitleCallback: (SubtitleFile) -> Unit,
         callback: (ExtractorLink) -> Unit
     ): Boolean {
-        Log.d(TAG, "resolveShow tmdbId=$tmdbId title='$title' s=$season e=$episode")
         var any = false
         any = sourceCornClick(tmdbId, season, episode, subtitleCallback, callback) || any
         any = sourceSevenMovies(tmdbId, season, episode, subtitleCallback, callback) || any
@@ -233,7 +229,6 @@ class KdesaSources {
         any = sourceCuevana3(tmdbId, title, season, episode, subtitleCallback, callback) || any
         any = sourceNova(tmdbId, season, episode, subtitleCallback, callback) || any
         any = sourceFsonline(tmdbId, title, season, episode, subtitleCallback, callback) || any
-        Log.d(TAG, "resolveShow done any=$any")
         return any
     }
 
@@ -309,7 +304,6 @@ class KdesaSources {
                     subCount++
                 }
             }
-            Log.d(TAG, "[$label] links=$count subs=$subCount")
             return count > 0
         } catch (e: Exception) {
             Log.e(TAG, "[$label] failed: ${e.message}")
@@ -412,7 +406,6 @@ class KdesaSources {
                     probe
                 )
             }
-            Log.d(TAG, "[$label] links=$count")
             return count > 0
         } catch (e: Exception) {
             Log.e(TAG, "[$label] failed: ${e.message}")
@@ -525,7 +518,6 @@ class KdesaSources {
                     Log.e(TAG, "[$label] server $server failed: ${e.message}")
                 }
             }
-            Log.d(TAG, "[$label] done any=$any")
             return any
         } catch (e: Exception) {
             Log.e(TAG, "[$label] failed: ${e.message}")
@@ -586,10 +578,9 @@ class KdesaSources {
             val asn = Regex("""'asn'\s*:\s*'([^']*)'""").find(html)?.groupValues?.get(1) ?: ""
             val canPlayFhd = html.contains("window.canPlayFHD = true")
             if (masterUrl.isNullOrBlank() || token.isNullOrBlank() || expires.isNullOrBlank()) {
-                Log.e(TAG, "[$label] masterUrl/token/expires missing (master=${masterUrl?.take(30)} token=${token != null} expires=${expires != null})")
+                Log.e(TAG, "[$label] stream fields missing")
                 return false
             }
-            Log.d(TAG, "[$label] master=$masterUrl fhd=$canPlayFhd")
 
             // the playlist endpoint rejects requests without the asn param even
             // when it is empty - always send token, expires and asn together
@@ -782,7 +773,6 @@ class KdesaSources {
                     }
                 }
             }
-            Log.d(TAG, "[$label] links=$count")
             return count > 0
         } catch (e: Exception) {
             Log.e(TAG, "[$label] failed: ${e.message}")
@@ -1313,7 +1303,6 @@ class KdesaSources {
                     }
                 }
             }
-            Log.d(TAG, "[$label] links=$count (from ${all.size} raw sources)")
             return count > 0
         } catch (e: Exception) {
             Log.e(TAG, "[$label] failed: ${e.message}")
@@ -1405,7 +1394,6 @@ class KdesaSources {
                 val loaded = resolveEmbed(embed, "$FSONLINE/", "$label $hostName", subtitleCallback, callback)
                 if (loaded) any = true
             }
-            Log.d(TAG, "[$label] done any=$any")
             return any
         } catch (e: Exception) {
             Log.e(TAG, "[$label] failed: ${e.message}")

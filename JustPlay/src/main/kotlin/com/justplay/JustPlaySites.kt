@@ -779,7 +779,15 @@ internal object Movies4uSite {
 
 
 internal object TmfSite {
-    private const val DEFAULT_DOMAIN = "https://themoviesflixhq.com"
+    private val FALLBACK_DOMAINS = listOf("https://themoviesflixhq.com", "https://moviesflixhq.com")
+
+    private fun searchAnchors(doc: Document): List<Pair<String, String>> {
+        return doc.select("article.latestpost a[id=featured-thumbnail]").mapNotNull { el ->
+            val t = el.attr("title").trim().ifBlank { el.selectFirst("img")?.attr("alt")?.trim().orEmpty() }
+            val href = el.attr("href").trim()
+            if (t.isNotBlank() && href.startsWith("http")) t to href else null
+        }
+    }
 
     suspend fun invoke(
         res: PlayLinkData,
@@ -787,31 +795,41 @@ internal object TmfSite {
         callback: (ExtractorLink) -> Unit
     ) {
         try {
-            val domain = FirebaseDomainHelper.getDomain("justplay_themoviesflix")
-                ?: FirebaseDomainHelper.getDomain("themoviesflix")
-                ?: DEFAULT_DOMAIN
             val title = res.title ?: return
 
-            val searchDoc = app.get(
-                "$domain/?s=${Uri.encode(title)}",
-                headers = PlayNet.headers(),
-                timeout = 20L
-            ).document
-            val anchors = searchDoc.select("article.latestpost a[id=featured-thumbnail]")
-                .mapNotNull { el ->
-                    val t = el.attr("title").trim().ifBlank { el.selectFirst("img")?.attr("alt")?.trim().orEmpty() }
-                    val href = el.attr("href").trim()
-                    if (t.isNotBlank() && href.startsWith("http")) t to href else null
-                }
-                .filter { (t, _) -> PlayNet.titleMatches(t, title) }
-            val target = anchors.firstOrNull { (t, _) ->
+            // the firebase entry can point at a mirror that is dead or cloudflare
+            // walled, the search itself decides which domain answers
+            val candidates = listOfNotNull(
+                FirebaseDomainHelper.getDomain("justplay_themoviesflix"),
+                FirebaseDomainHelper.getDomain("themoviesflix")
+            ) + FALLBACK_DOMAINS
+
+            var domain: String? = null
+            var anchors: List<Pair<String, String>> = emptyList()
+            for (candidate in candidates.distinct()) {
+                // a dead mirror must not burn a full webview solve, a short
+                // solve budget gives the next domain its turn quickly
+                val searchDoc = PlayNet.fetchWithCf(
+                    "$candidate/?s=${Uri.encode(title)}", timeout = 15L, solveTimeout = 20L
+                )?.document ?: continue
+                val found = searchAnchors(searchDoc)
+                if (found.isEmpty()) continue
+                domain = candidate
+                anchors = found
+                break
+            }
+            if (domain == null || anchors.isEmpty()) return
+            val siteDomain = domain
+
+            val matched = anchors.filter { (t, _) -> PlayNet.titleMatches(t, title) }
+            val target = matched.firstOrNull { (t, _) ->
                 if (res.season != null) PlayNet.seasonsOf(t)?.contains(res.season) == true
                 else PlayNet.yearMatches(t, res.matchYear)
-            } ?: anchors.firstOrNull() ?: return
+            } ?: matched.firstOrNull() ?: anchors.firstOrNull() ?: return
 
-            val postUrl = target.second
-            val doc = app.get(postUrl, headers = PlayNet.headers(domain), timeout = 20L).document
-            val groups = doc.select("div.mfx-download-group")
+            val postUrl = target.second.replaceFirst(Regex("^[^/]*//[^/]+"), siteDomain)
+            val postDoc = PlayNet.fetchWithCf(postUrl, siteDomain, timeout = 20L)?.document ?: return
+            val groups = postDoc.select("div.mfx-download-group")
 
             if (res.season == null) {
                 val driveLinks = groups.flatMap { group ->
@@ -829,7 +847,7 @@ internal object TmfSite {
                     driveLinks.forEach { (link, qualityTitle) ->
                         async(Dispatchers.IO) {
                             DrivePages.emit(
-                                "themoviesflix", link, null, null, qualityTitle, domain, domain,
+                                "themoviesflix", link, null, null, qualityTitle, siteDomain, siteDomain,
                                 subtitleCallback, callback
                             )
                         }
@@ -854,7 +872,7 @@ internal object TmfSite {
                 }.distinctBy { it.first }
                 driveLinks.forEach { (link, qualityTitle) ->
                     DrivePages.emit(
-                        "themoviesflix", link, res.episode, res.season, qualityTitle, domain, domain,
+                        "themoviesflix", link, res.episode, res.season, qualityTitle, siteDomain, siteDomain,
                         subtitleCallback, callback
                     )
                 }

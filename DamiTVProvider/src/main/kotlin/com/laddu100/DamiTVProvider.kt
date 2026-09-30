@@ -414,10 +414,8 @@ class DamiTVProvider : MainAPI() {
 
         val streamsList = mutableListOf<StreamInfo>()
 
-        // 1. Parse mapped TV channels directly if present.
-        // These resolve through DamiTV's DLHD proxy (/papi/tv/dlhd/<id>/playlist.m3u8)
-        // which proxies the stream through dami-tv.pro itself — the MOST RELIABLE path
-        // (the direct BunnyCDN hlsUrl is intermittently blocked, see loadLinks notes).
+        // mapped channels go through the dlhd proxy on dami-tv.pro itself,
+        // the direct BunnyCDN url is intermittently blocked
         if (!eventData.tvChannels.isNullOrEmpty()) {
             eventData.tvChannels.forEach { ch ->
                 val chName = if (isUpcoming) "${ch.name} (Upcoming)" else "${ch.name}"
@@ -524,12 +522,8 @@ class DamiTVProvider : MainAPI() {
             try {
                 // 1. DLHD proxy streams
                 if (stream.url.contains("/papi/tv/dlhd/")) {
-                    // Keep the original domain URL — do NOT rewrite to IP because
-                    // Cloudflare's SSL certificate won't match an IP address,
-                    // causing ERR_SSL_PROTOCOL_ERROR in ExoPlayer.
-                    // The DoH dnsClient handles API calls; for stream playback,
-                    // the user needs Cloudflare DNS (1.1.1.1) configured on their
-                    // device if their ISP blocks the domain.
+                    // keep the domain, cloudflare's certificate does not cover
+                    // the bare IP and exoplayer would fail the handshake
                     callback.invoke(
                         newExtractorLink(
                             source = this.name,
@@ -575,12 +569,9 @@ class DamiTVProvider : MainAPI() {
                         if (source.isNotEmpty() && streamId.isNotEmpty() && streamNo.isNotEmpty()) {
                             val playHeaders = hlsPlayHeaders
 
-                            // Direct BunnyCDN SD HLS via sd-token.
-                            // NON-FATAL: dami-tv.pro removed/deprecated the /papi/sd-token
-                            // endpoint (it now 404s and the site's web player no longer
-                            // references damitvsd.b-cdn.net). A failure here MUST NOT abort
-                            // the embedUrl fallback below, otherwise the whole server
-                            // variant disappears from the playable stream list.
+                            // the sd-token endpoint is gone from the site, this
+                            // only works when it comes back so a failure must fall
+                            // through to the embed fallback
                             try {
                                 val tokenResponse = apiGet("$mainUrl/papi/sd-token", apiHeaders)
                                 val tokenData = parseJson<Map<String, Any>>(tokenResponse)
@@ -612,11 +603,8 @@ class DamiTVProvider : MainAPI() {
                             } catch (e: Exception) {
                             }
 
-                            // Fallback: hand the variant's embedUrl to CloudStream's extractor
-                            // registry. embedindia.st is JS-gated (a WASM module resolves
-                            // the real m3u8 to vishnu.indianservers.st at runtime), so plain
-                            // HTTP scraping cannot recover an m3u8 — only the registry is
-                            // tried as a best-effort, non-fatal last resort.
+                            // embedindia.st resolves its real m3u8 inside a WASM
+                            // module, only the extractor registry can play it
                             if (fallbackUrl.isNotEmpty()) {
                                 try {
                                     loadExtractor(fallbackUrl, "$mainUrl/", subtitleCallback, callback)
