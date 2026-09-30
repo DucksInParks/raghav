@@ -7,17 +7,11 @@ import com.lagradost.cloudstream3.plugins.Plugin
 @CloudstreamPlugin
 class TheMoviesFlixPlugin : Plugin() {
     override fun load(context: Context) {
-        initTMFCFBypass(context)
+        TMFCFStore.init(context)
         registerMainAPI(TheMoviesFlix())
         registerExtractorAPI(FastDlExtractor())
         registerExtractorAPI(VCloudExtractor())
         registerExtractorAPI(GoFileExtractor())
         registerExtractorAPI(FileBeeExtractor())
-        openSettings = { ctx ->
-            (ctx as? androidx.appcompat.app.AppCompatActivity)?.let { activity ->
-                TheMoviesFlixSettingsFragment().show(activity.supportFragmentManager, "TheMoviesFlixSettings")
-            }
-            kotlin.Unit
-        }
     }
 }
