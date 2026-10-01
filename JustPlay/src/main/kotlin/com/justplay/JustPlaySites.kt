@@ -80,6 +80,9 @@ internal object DrivePages {
             val res = PlayNet.fetchDrivePage(fetchUrl, referer)
                 ?: throw Exception("drive page unreachable")
             val doc = res.document
+            // season packs arrive as zip archives, no player can open them
+            val pageTitle = doc.title().substringBefore(" – ").substringBefore(" - ").trim()
+            if (pageTitle.contains("zip", true)) return
             val driveHost = try {
                 URI(res.url).host?.lowercase()
             } catch (e: Exception) {
@@ -777,9 +780,12 @@ internal object Movies4uSite {
     }
 }
 
-
 internal object TmfSite {
     private val FALLBACK_DOMAINS = listOf("https://themoviesflixhq.com", "https://moviesflixhq.com")
+
+    // whole season packs arrive as zip archives, they are not playable so
+    // the group is dropped before its drive page is fetched
+    private val packRegex = Regex("""(?i)\b(zip|rar|7z|batch)\b""")
 
     private fun searchAnchors(doc: Document): List<Pair<String, String>> {
         return doc.select("article.latestpost a[id=featured-thumbnail]").mapNotNull { el ->
@@ -835,6 +841,7 @@ internal object TmfSite {
                 val driveLinks = groups.flatMap { group ->
                     val qualityTitle = group.selectFirst("h3")?.text()
                         ?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+                    if (packRegex.containsMatchIn(qualityTitle)) return@flatMap emptyList()
                     group.select("a.mfx-download-link, a[href]").mapNotNull { el ->
                         val text = el.text()
                         val href = el.attr("href").trim()
@@ -862,6 +869,7 @@ internal object TmfSite {
                 val driveLinks = seasonGroups.flatMap { group ->
                     val qualityTitle = group.selectFirst("h3")?.text()
                         ?.replace(Regex("\\s+"), " ")?.trim().orEmpty()
+                    if (packRegex.containsMatchIn(qualityTitle)) return@flatMap emptyList()
                     group.select("a.mfx-download-link, a[href]").mapNotNull { el ->
                         val text = el.text()
                         val href = el.attr("href").trim()

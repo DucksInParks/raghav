@@ -566,22 +566,327 @@ class PlayVCloud : ExtractorApi() {
             val res = PlayNet.fetchWithCf(url, referer, timeout = 30L) ?: return
             val doc = res.document
             val base = PlayNet.getBaseUrl(res.url)
+            var target: org.jsoup.nodes.Document = doc
             var link: String? = null
-            if (res.url.contains("/video/")) {
-                link = doc.selectFirst("div.vd > center > a")?.attr("href")
-            } else {
-                val script = doc.selectFirst("script:containsData(url)")?.data().orEmpty()
-                link = Regex("""var\s+url\s*=\s*atob\s*\(\s*atob\s*\(\s*['"]([^'"]+)['"]\s*\)\s*\)""")
-                    .find(script)?.groupValues?.get(1)
-                    ?.let { runCatching { base64Decode(base64Decode(it)) }.getOrNull() }
-                    ?: Regex("""var\s+url\s*=\s*['"]([^'"]*)['"]""").find(script)?.groupValues?.get(1)
+
+            // older pages carry a download hop page first
+            val hop = doc.selectFirst("div.main h4 a")?.attr("href")?.trim()
+            if (!hop.isNullOrBlank()) {
+                val hopUrl = PlayNet.absolute(hop, base)
+                val hopRes = try {
+                    PlayNet.fetchWithCf(hopUrl, base, timeout = 30L)
+                } catch (e: Exception) {
+                    null
+                }
+                hopRes?.let {
+                    target = it.document
+                    link = extractVCloudLink(target)
+                }
+            }
+            if (link.isNullOrBlank()) link = extractVCloudLink(doc)
+
+            if (link.isNullOrBlank() && res.url.contains("/video/")) {
+                link = target.selectFirst("div.vd > center > a")?.attr("href")?.trim()
             }
             if (link.isNullOrBlank()) return
+
             val abs = if (link.startsWith("http")) link else base + link
-            val targetDoc = PlayNet.fetchWithCf(abs, base)?.document ?: return
-            PlayHubCloud.emitHubServers(targetDoc, PlayNet.getBaseUrl(abs), abs, subtitleCallback, callback)
+            if (!abs.startsWith("http")) return
+
+            val targetRes = try {
+                PlayNet.fetchWithCf(abs, base, timeout = 25L)
+            } catch (e: Exception) {
+                null
+            } ?: return
+            val emitted = PlayHubCloud.emitHubServers(
+                targetRes.document, PlayNet.getBaseUrl(abs), abs, subtitleCallback, callback
+            )
+            // when the target is the file itself there is no hub page, the
+            // google link plays directly
+            if (!emitted && (abs.contains("drive.google.com") || abs.contains("googleusercontent"))) {
+                callback(
+                    newExtractorLink(name, name, abs, ExtractorLinkType.VIDEO) {
+                        this.headers = mapOf("Referer" to "$mainUrl/")
+                    }
+                )
+            }
         } catch (e: Exception) {
             Log.d(PlayNet.TAG, "vcloud: ${e.message}")
+        }
+    }
+
+    private fun extractVCloudLink(doc: Document): String? {
+        val script = doc.selectFirst("script:containsData(url)")?.data().orEmpty()
+        if (script.isBlank()) return null
+        Regex("""var\s+url\s*=\s*atob\s*\(\s*atob\s*\(\s*['"]([^'"]+)['"]\s*\)\s*\)""")
+            .find(script)?.groupValues?.get(1)
+            ?.let { encoded ->
+                val decoded = runCatching { base64Decode(encoded) }.getOrNull()
+                    ?.let { runCatching { base64Decode(it) }.getOrNull() }
+                if (decoded != null && decoded.startsWith("http")) return decoded
+            }
+        Regex("""var\s+url\s*=\s*['"]([^'"]*)['"]""").find(script)?.groupValues?.get(1)
+            ?.takeIf { it.startsWith("http") }
+            ?.let { return it }
+        return doc.selectFirst("div.card-body h2 a.btn[href]")?.attr("href")?.trim()
+            ?.takeIf { it.startsWith("http") }
+    }
+}
+
+// the vegadrive share page lists one bridge provider per host, vegadrop
+// (skydrop) streams the drive file itself and the others land on their own
+// partner pages, providers come and go so each result is checked against
+// the host it is supposed to be on
+class PlayVegaDrive : ExtractorApi() {
+    override val name = "V-Drive"
+    override val mainUrl = "https://one.vegadrive.app"
+    override val requiresReferer = false
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        try {
+            val page = app.get(
+                url,
+                headers = PlayNet.browserHeaders("https://nexdrive.fit/"),
+                timeout = 20L
+            )
+            val base = PlayNet.getBaseUrl(page.url)
+            val token = url.substringAfter("/s/").substringBefore("?")
+
+            val drop = providerLink(base, token, "skydrop")
+            if (drop != null && drop.contains("googleusercontent") &&
+                !drop.substringAfterLast("/").contains(".zip", true)
+            ) {
+                callback(newExtractorLink(name, "V-Drive Vegadrop (10Gbps)", drop, ExtractorLinkType.VIDEO))
+            }
+
+            val pixel = providerLink(base, token, "pixeldrain")
+            if (pixel != null && pixel.contains("pixeldrain.com/u/")) {
+                val id = pixel.substringBefore("?").substringBefore("#").substringAfterLast("/")
+                if (id.isNotBlank()) {
+                    callback(
+                        newExtractorLink(name, "V-Drive Pixeldrain", "https://pixeldrain.com/api/file/$id", ExtractorLinkType.VIDEO)
+                    )
+                }
+            }
+
+            val buzz = providerLink(base, token, "buzzheavier")
+            if (buzz != null && buzz.contains("bzzhr.co")) {
+                callback(newExtractorLink(name, "V-Drive Buzzheavier", buzz, ExtractorLinkType.VIDEO))
+            }
+
+            val telegram = providerLink(base, token, "telegram")
+            if (telegram != null && telegram.contains("tgfiles")) {
+                callback(newExtractorLink(name, "V-Drive Telegram", telegram, ExtractorLinkType.VIDEO))
+            }
+        } catch (e: Exception) {
+            Log.d(PlayNet.TAG, "vegadrive: ${e.message}")
+        }
+    }
+
+    // the provider pages only answer when the share page is sent as referer,
+    // without it they bounce straight back to the picker
+    private suspend fun providerLink(base: String, token: String, provider: String): String? {
+        val start = if (provider == "skydrop") {
+            "$base/go/$token/skydrop"
+        } else {
+            "$base/d/$token/$provider"
+        }
+        return try {
+            PlayNet.resolveRedirectTarget(start, "$base/")
+        } catch (e: Exception) {
+            null
+        }
+    }
+}
+
+// filepress is a react app whose html pages sit behind an interactive
+// turnstile while the json api is open, file/get describes the file (its
+// name is the only reliable zip pack detector), downlaod/ queues a task or
+// answers instantly depending on the method, downlaod2/ turns a finished
+// task into the link
+class PlayFilePress : ExtractorApi() {
+    override val name = "FilePress"
+    override val mainUrl = "https://filebee.xyz"
+    override val requiresReferer = false
+
+    private val fileId = Regex("""/file/([a-f0-9]{16,40})""")
+
+    override suspend fun getUrl(
+        url: String,
+        referer: String?,
+        subtitleCallback: (SubtitleFile) -> Unit,
+        callback: (ExtractorLink) -> Unit
+    ) {
+        val id = fileId.find(url)?.groupValues?.get(1) ?: return
+        try {
+            val infoRes = app.get(
+                "$mainUrl/api/file/get/$id",
+                headers = PlayNet.browserHeaders("$mainUrl/"),
+                timeout = 15L
+            )
+            if (!infoRes.isSuccessful) return
+            val info = try {
+                JSONObject(infoRes.text).optJSONObject("data") ?: return
+            } catch (e: Exception) {
+                return
+            }
+            if (isArchiveName(info.optString("name"))) return
+
+            // dotflix mirrors the drive file and serves it as an instant link
+            val dotflix = download(id, "dotFlixDownlaod")
+            if (dotflix != null && dotflix.startsWith("http")) {
+                val direct = resolveDotFlix(dotflix)
+                if (direct != null && direct.startsWith("http")) {
+                    callback(newExtractorLink(name, "FilePress Instant", direct, ExtractorLinkType.VIDEO))
+                }
+            }
+
+            val telegram = download(id, "telegramDownload")
+            if (telegram != null && telegram.startsWith("http")) {
+                callback(newExtractorLink(name, "FilePress Telegram", telegram, ExtractorLinkType.VIDEO))
+            }
+
+            // the index worker proxies through its own host with a short
+            // lived link, it is only emitted when the file actually answers
+            val task = download(id, "indexDownlaod")
+            if (task != null && task.matches(Regex("[a-f0-9]{16,40}"))) {
+                val link = final(task, "indexDownlaod")
+                if (link != null) {
+                    val probe = PlayNet.probe(link, "$mainUrl/")
+                    if (probe != null && probe in 200..299) {
+                        callback(newExtractorLink(name, "FilePress Direct", link, ExtractorLinkType.VIDEO))
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            Log.d(PlayNet.TAG, "filepress: ${e.message}")
+        }
+    }
+
+    private fun isArchiveName(name: String): Boolean =
+        Regex("""(?i)\.(zip|rar|7z)\s*$""").containsMatchIn(name.trim())
+
+    private suspend fun download(id: String, method: String): String? {
+        return try {
+            val res = app.post(
+                "$mainUrl/api/file/downlaod/",
+                headers = PlayNet.browserHeaders("$mainUrl/").toMutableMap().apply {
+                    put("Content-Type", "application/json")
+                    put("Accept", "application/json")
+                    put("Origin", mainUrl)
+                },
+                json = JSONObject()
+                    .put("captchaValue", "")
+                    .put("id", id)
+                    .put("method", method)
+                    .toString(),
+                timeout = 25L
+            )
+            if (!res.isSuccessful) return null
+            val parsed = try {
+                JSONObject(res.text)
+            } catch (e: Exception) {
+                return null
+            }
+            if (!parsed.optBoolean("status")) return null
+            when (val data = parsed.opt("data")) {
+                is String -> data.takeIf { it.isNotBlank() }
+                else -> null
+            }
+        } catch (e: Exception) {
+            Log.d(PlayNet.TAG, "filepress download: ${e.message}")
+            null
+        }
+    }
+
+    private suspend fun final(taskId: String, method: String): String? {
+        return try {
+            val res = app.post(
+                "$mainUrl/api/file/downlaod2/",
+                headers = PlayNet.browserHeaders("$mainUrl/").toMutableMap().apply {
+                    put("Content-Type", "application/json")
+                    put("Accept", "application/json")
+                    put("Origin", mainUrl)
+                },
+                json = JSONObject()
+                    .put("captchaValue", "")
+                    .put("id", taskId)
+                    .put("method", method)
+                    .toString(),
+                timeout = 30L
+            )
+            if (!res.isSuccessful) return null
+            val parsed = try {
+                JSONObject(res.text)
+            } catch (e: Exception) {
+                return null
+            }
+            if (!parsed.optBoolean("status")) return null
+            when (val data = parsed.opt("data")) {
+                is String -> data.takeIf { it.startsWith("http") }
+                is org.json.JSONArray -> (0 until data.length())
+                    .firstNotNullOfOrNull { i ->
+                        data.optString(i).takeIf { it.startsWith("http") }
+                    }
+                else -> null
+            }
+        } catch (e: Exception) {
+            Log.d(PlayNet.TAG, "filepress final: ${e.message}")
+            null
+        }
+    }
+
+    // the dotflix share page carries a per file code in a btoa call, the
+    // reversed base64 of it is posted to the extract endpoint which answers
+    // with the drive file url
+    private suspend fun resolveDotFlix(shareUrl: String): String? {
+        return try {
+            val text = app.get(
+                shareUrl,
+                headers = PlayNet.browserHeaders("https://new2.dotflix.shop/"),
+                timeout = 20L
+            ).text
+            val code = Regex("""btoa\('([^']+)'\)""").find(text)?.groupValues?.get(1)
+                ?: return null
+            val obfuscated = java.util.Base64.getEncoder()
+                .encodeToString(code.toByteArray())
+                .reversed()
+            val requestId = List(13) {
+                "abcdefghijklmnopqrstuvwxyz0123456789".random()
+            }.joinToString("")
+            val timestamp = System.currentTimeMillis().toString()
+            val res = app.post(
+                "https://dotflix.store/api/extract-download",
+                headers = PlayNet.browserHeaders("https://new2.dotflix.shop/").toMutableMap().apply {
+                    put("Content-Type", "application/json")
+                    put("Accept", "application/json")
+                    put("X-Request-ID", requestId)
+                    put("X-Timestamp", timestamp)
+                    put("Origin", "https://new2.dotflix.shop")
+                },
+                json = JSONObject()
+                    .put("requestId", requestId)
+                    .put("timestamp", timestamp)
+                    .put("data", obfuscated)
+                    .toString(),
+                timeout = 25L
+            )
+            if (!res.isSuccessful) return null
+            val parsed = try {
+                JSONObject(res.text)
+            } catch (e: Exception) {
+                return null
+            }
+            if (!parsed.optBoolean("success")) return null
+            parsed.optString("downloadUrl").takeIf { it.startsWith("http") }
+        } catch (e: Exception) {
+            Log.d(PlayNet.TAG, "dotflix: ${e.message}")
+            null
         }
     }
 }

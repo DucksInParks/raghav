@@ -28,6 +28,40 @@ internal object PlayNet {
         return h
     }
 
+    // themoviesflix and its drive hosts block a bare user agent on a lot of
+    // networks, only the full browser header set gets through
+    fun browserHeaders(referer: String? = null): Map<String, String> {
+        val h = LinkedHashMap<String, String>()
+        h["User-Agent"] = PLAY_UA
+        h["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8"
+        h["Accept-Language"] = "en-US,en;q=0.9"
+        h["sec-ch-ua"] = "\"Chromium\";v=\"131\", \"Not_A Brand\";v=\"24\""
+        h["sec-ch-ua-mobile"] = "?0"
+        h["sec-ch-ua-platform"] = "\"Windows\""
+        h["Sec-Fetch-Dest"] = "document"
+        h["Sec-Fetch-Mode"] = "navigate"
+        h["Sec-Fetch-Site"] = if (referer != null) "same-origin" else "none"
+        h["Sec-Fetch-User"] = "?1"
+        h["Upgrade-Insecure-Requests"] = "1"
+        referer?.let { h["Referer"] = it }
+        return h
+    }
+
+    // one kilobyte range request, drops links whose file is gone before
+    // they reach the player
+    suspend fun probe(url: String, referer: String? = null): Int? {
+        return try {
+            val res = app.get(
+                url,
+                headers = browserHeaders(referer).toMutableMap().apply { put("Range", "bytes=0-1023") },
+                timeout = 15L
+            )
+            res.code
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun getBaseUrl(url: String): String = try {
         val uri = URI(url)
         "${uri.scheme}://${uri.host}"
@@ -354,6 +388,9 @@ internal object PlayNet {
             host.contains("gofile") -> { r, s, c -> PlayGofile().getUrl(url, r, s, c) }
             host.contains("fastdl") -> { r, s, c -> PlayFastDl().getUrl(url, r, s, c) }
             host.contains("vcloud") -> { r, s, c -> PlayVCloud().getUrl(url, r, s, c) }
+            host.contains("vegadrive") -> { r, s, c -> PlayVegaDrive().getUrl(url, r, s, c) }
+            host.contains("filebee") || host.contains("filepress") || host.contains("fpgo") ->
+                { r, s, c -> PlayFilePress().getUrl(url, r, s, c) }
             else -> {
                 emitSiteLink(site, url, label, quality, referer, subtitleCallback, callback)
                 return

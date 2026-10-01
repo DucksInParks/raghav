@@ -11,6 +11,8 @@ class JustPlayPlugin : Plugin() {
         registerMainAPI(JustPlay())
         registerExtractorAPI(PlayHubCloud())
         registerExtractorAPI(PlayVCloud())
+        registerExtractorAPI(PlayVegaDrive())
+        registerExtractorAPI(PlayFilePress())
         registerExtractorAPI(PlayFastDl())
         registerExtractorAPI(PlayHubCdn())
         registerExtractorAPI(PlayHblinks())

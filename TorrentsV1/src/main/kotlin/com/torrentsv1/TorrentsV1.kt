@@ -110,12 +110,13 @@ private fun getQualityFromString(title: String?): Int {
 
 private fun getSeedersFromTitle(title: String?): Int? {
     if (title.isNullOrBlank()) return null
-    return Regex("""[👤👥]\s*(\d+)""").find(title)?.groupValues?.get(1)?.toIntOrNull()
+    return Regex("[\uD83D\uDC64\uD83D\uDC65]\\s*(\\d+)").find(title)?.groupValues?.get(1)?.toIntOrNull()
 }
 
 private fun simplifyTitle(title: String?): String {
     if (title.isNullOrBlank()) return ""
-    return title.replace(Regex("""[👤👥⚙️💾]"""), " ").replace(Regex("""\s+"""), " ").trim()
+    return title.replace(Regex("[\uD83D\uDC64\uD83D\uDC65\u2699\uFE0F\uD83D\uDCBE]"), " ")
+        .replace(Regex("\\s+"), " ").trim()
 }
 
 private suspend fun anilistQuery(query: String, variables: Map<String, Any?>): String {
